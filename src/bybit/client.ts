@@ -70,9 +70,10 @@ export class BybitClient {
 
   async getCounterpartyInfo(
     accountId: string,
-    otherUserId: string,
+    originalUid: string,
+    orderId: string,
   ): Promise<CounterpartyUserInfo> {
-    return this.p2p.getCounterpartyInfo(accountId, otherUserId);
+    return this.p2p.getCounterpartyInfo(accountId, originalUid, orderId);
   }
 
   async getP2PPaymentMethods(accountId: string): Promise<UserPaymentMethod[]> {
@@ -103,8 +104,13 @@ export class BybitClient {
     return this.p2p.getPendingOrders(accountId);
   }
 
-  async markP2POrderAsPaid(accountId: string, orderId: string): Promise<void> {
-    return this.p2p.markOrderAsPaid(accountId, orderId);
+  async markP2POrderAsPaid(
+    accountId: string,
+    orderId: string,
+    paymentType: string,
+    paymentId: string,
+  ): Promise<void> {
+    return this.p2p.markOrderAsPaid(accountId, orderId, paymentType, paymentId);
   }
 
   async releaseP2POrder(accountId: string, orderId: string): Promise<void> {
@@ -121,8 +127,18 @@ export class BybitClient {
     accountId: string,
     orderId: string,
     message: string,
+    contentType?: string,
+    msgUuid?: string,
+    fileName?: string,
   ): Promise<void> {
-    return this.p2p.sendChatMessage(accountId, orderId, message);
+    return this.p2p.sendChatMessage(
+      accountId,
+      orderId,
+      message,
+      contentType,
+      msgUuid,
+      fileName,
+    );
   }
 
   async getP2PChatMessages(
