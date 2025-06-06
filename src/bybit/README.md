@@ -87,13 +87,23 @@ await client.releaseOrder(accountId, orderId);
 
 - **Базовый URL**: `https://api.bybit.com` (mainnet) или `https://api-testnet.bybit.com` (testnet)
 - **Информация об аккаунте**: `POST /v5/p2p/user/personal/info`
+- **Информация о контрагенте**: `POST /v5/p2p/user/order/personal/info`
+- **Платежные методы пользователя**: `POST /v5/p2p/user/payment/list`
 - **Баланс монет**: `GET /v5/asset/transfer/query-account-coins-balance`
 - **Список объявлений**: `POST /v5/p2p/item/online`
-- **Создание объявления**: `POST /v5/p2p/ad/post-new`
+- **Создание объявления**: `POST /v5/p2p/item/create`
+- **Удаление объявления**: `POST /v5/p2p/ad/remove`
+- **Обновление объявления**: `POST /v5/p2p/ad/update-list`
+- **Мои объявления**: `POST /v5/p2p/ad/ad-list`
+- **Детали объявления**: `POST /v5/p2p/item/info`
 - **Список ордеров**: `POST /v5/p2p/order/simplifyList`
-- **Сообщения чата**: `POST /v5/p2p/order/chat-msg`
-- **Отправка сообщения**: `POST /v5/p2p/order/send-chat-msg`
-- **Освобождение средств**: `POST /v5/p2p/order/release-digital-asset`
+- **Детали ордера**: `POST /v5/p2p/order/info`
+- **Незавершенные ордера**: `POST /v5/p2p/order/pending/simplifyList`
+- **Отметить ордер оплаченным**: `POST /v5/p2p/order/pay`
+- **Освобождение средств**: `POST /v5/p2p/order/finish`
+- **Отправка сообщения**: `POST /v5/p2p/order/message/send`
+- **Загрузка файла в чат**: `POST /v5/p2p/oss/upload_file`
+- **Получение сообщений чата**: `POST /v5/p2p/order/message/listpage`
 
 Примечание: Все P2P эндпоинты, кроме баланса монет, используют метод POST.
 

@@ -101,23 +101,24 @@ export class P2PClient {
 
   async getCounterpartyInfo(
     accountId: string,
-    otherUserId: string,
+    originalUid: string,
+    orderId: string,
   ): Promise<CounterpartyUserInfo> {
     return this.makeRequest<CounterpartyUserInfo>(
       accountId,
       "POST",
-      "/v5/p2p/user/counterparty-user-info",
-      { otherUserId },
+      "/v5/p2p/user/order/personal/info",
+      { originalUid, orderId },
     );
   }
 
   async getUserPaymentMethods(accountId: string): Promise<UserPaymentMethod[]> {
-    const result = await this.makeRequest<{ list: UserPaymentMethod[] }>(
+    const result = await this.makeRequest<{ result: UserPaymentMethod[] }>(
       accountId,
       "POST",
-      "/v5/p2p/user/query-user-payment",
+      "/v5/p2p/user/payment/list",
     );
-    return result.list || [];
+    return result.result || [];
   }
 
   // ==================== Order Management Endpoints ====================
@@ -147,7 +148,7 @@ export class P2PClient {
     return this.makeRequest<P2POrderDetail>(
       accountId,
       "POST",
-      "/v5/p2p/order/order-detail",
+      "/v5/p2p/order/info",
       { orderId },
     );
   }
@@ -156,27 +157,27 @@ export class P2PClient {
     const result = await this.makeRequest<{ list: P2POrder[] }>(
       accountId,
       "POST",
-      "/v5/p2p/order/pending-order",
+      "/v5/p2p/order/pending/simplifyList",
+      { page: 1, size: 20 },
     );
     return result.list || [];
   }
 
-  async markOrderAsPaid(accountId: string, orderId: string): Promise<void> {
-    await this.makeRequest(
-      accountId,
-      "POST",
-      "/v5/p2p/order/mark-order-as-paid",
-      { orderId },
-    );
+  async markOrderAsPaid(
+    accountId: string,
+    orderId: string,
+    paymentType: string,
+    paymentId: string,
+  ): Promise<void> {
+    await this.makeRequest(accountId, "POST", "/v5/p2p/order/pay", {
+      orderId,
+      paymentType,
+      paymentId,
+    });
   }
 
   async releaseOrder(accountId: string, orderId: string): Promise<void> {
-    await this.makeRequest(
-      accountId,
-      "POST",
-      "/v5/p2p/order/release-digital-asset",
-      { orderId },
-    );
+    await this.makeRequest(accountId, "POST", "/v5/p2p/order/finish", { orderId });
   }
 
   async cancelOrder(accountId: string, orderId: string): Promise<void> {
@@ -191,11 +192,16 @@ export class P2PClient {
     accountId: string,
     orderId: string,
     message: string,
+    contentType: string = "str",
+    msgUuid: string = "",
+    fileName?: string,
   ): Promise<void> {
-    await this.makeRequest(accountId, "POST", "/v5/p2p/order/send-chat-msg", {
+    await this.makeRequest(accountId, "POST", "/v5/p2p/order/message/send", {
       orderId,
-      msgType: "TEXT",
       message,
+      contentType,
+      msgUuid,
+      fileName,
     });
   }
 
@@ -205,16 +211,11 @@ export class P2PClient {
     fileName: string,
     fileContent: string, // base64 encoded
   ): Promise<ChatFile> {
-    return this.makeRequest<ChatFile>(
-      accountId,
-      "POST",
-      "/v5/p2p/order/upload-chat-file",
-      {
-        orderId,
-        fileName,
-        fileContent,
-      },
-    );
+    return this.makeRequest<ChatFile>(accountId, "POST", "/v5/p2p/oss/upload_file", {
+      orderId,
+      fileName,
+      fileContent,
+    });
   }
 
   async getChatMessages(
@@ -226,11 +227,11 @@ export class P2PClient {
     return this.makeRequest<PagedResult<ChatMessage>>(
       accountId,
       "POST",
-      "/v5/p2p/order/chat-msg",
+      "/v5/p2p/order/message/listpage",
       {
         orderId,
-        page,
-        limit,
+        currentPage: page,
+        size: limit,
       },
     );
   }
