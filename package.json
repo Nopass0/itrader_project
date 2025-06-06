@@ -1,0 +1,31 @@
+{
+  "name": "itrader_project",
+  "module": "src/app.ts",
+  "type": "module",
+  "scripts": {
+    "dev": "bun run --watch src/app.ts",
+    "build": "bun run build",
+    "start": "bun run src/app.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.9.0",
+    "@types/pdf-parse": "^1.1.5",
+    "axios": "^1.9.0",
+    "bybit-api": "^4.1.9",
+    "decimal.js": "^10.5.0",
+    "googleapis": "^150.0.1",
+    "node-cron": "^4.1.0",
+    "open": "^10.1.2",
+    "pdf-lib": "^1.17.1",
+    "pdf-parse": "^1.1.1",
+    "prisma": "^6.9.0",
+    "uuid": "^11.1.0",
+    "zod": "^3.25.53"
+  }
+}
