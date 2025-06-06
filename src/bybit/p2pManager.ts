@@ -1,480 +1,449 @@
-import { RestClientV5 } from "bybit-api";
-import type {
+/**
+ * Bybit P2P Manager
+ * Manages multiple P2P accounts with WebSocket-like functionality
+ */
+
+import { EventEmitter } from 'events';
+import { P2PClient } from './p2pClient';
+import {
+  P2PConfig,
+  P2PAccount,
   P2PAdvertisement,
-  P2POrder,
-  PaymentMethod,
   CreateAdvertisementParams,
-  P2PBalance,
-  P2PMessage,
-} from "./types/models";
-import { AccountManager } from "./accountManager";
-import Decimal from "decimal.js";
-import { TimeSyncManager } from "./utils/timeSync";
+  UpdateAdvertisementParams,
+  P2POrder,
+  ChatMessage,
+  SendMessageParams,
+  PaymentMethod,
+  PaginatedResponse,
+  AdvertisementFilter,
+  OrderFilter,
+  P2PEvent,
+} from './types/p2p';
 
-export class P2PManager {
-  constructor(private accountManager: AccountManager) {}
+export class P2PManager extends EventEmitter {
+  private accounts: Map<string, P2PAccount> = new Map();
+  private clients: Map<string, P2PClient> = new Map();
+  private activeAccountId: string | null = null;
 
-  async getP2PBalance(accountId: string): Promise<P2PBalance[]> {
-    const httpClient = this.accountManager.getHttpClient(accountId);
-    if (!httpClient) {
+  constructor() {
+    super();
+  }
+
+  /**
+   * Add new P2P account
+   */
+  async addAccount(accountId: string, config: P2PConfig): Promise<void> {
+    if (this.accounts.has(accountId)) {
+      throw new Error(`Account ${accountId} already exists`);
+    }
+
+    const account: P2PAccount = {
+      id: accountId,
+      config,
+      isActive: false,
+    };
+
+    const client = new P2PClient(config);
+    
+    // Setup event forwarding
+    this.setupClientEvents(accountId, client);
+
+    try {
+      await client.connect();
+      account.isActive = true;
+      account.lastSync = new Date();
+    } catch (error) {
+      console.error(`Failed to connect account ${accountId}:`, error);
+      account.isActive = false;
+    }
+
+    this.accounts.set(accountId, account);
+    this.clients.set(accountId, client);
+
+    // Set as active if first account
+    if (!this.activeAccountId) {
+      this.activeAccountId = accountId;
+    }
+
+    this.emit('accountAdded', { accountId, isActive: account.isActive });
+  }
+
+  /**
+   * Remove P2P account
+   */
+  removeAccount(accountId: string): void {
+    const client = this.clients.get(accountId);
+    if (client) {
+      client.disconnect();
+      client.removeAllListeners();
+    }
+
+    this.accounts.delete(accountId);
+    this.clients.delete(accountId);
+
+    if (this.activeAccountId === accountId) {
+      this.activeAccountId = this.accounts.keys().next().value || null;
+    }
+
+    this.emit('accountRemoved', { accountId });
+  }
+
+  /**
+   * Switch active account
+   */
+  switchAccount(accountId: string): void {
+    if (!this.accounts.has(accountId)) {
       throw new Error(`Account ${accountId} not found`);
     }
 
-    // Get account to check if testnet
-    const account = this.accountManager.getAccount(accountId);
-    await TimeSyncManager.syncServerTime(account?.isTestnet || false);
-
-    try {
-      // Use the correct endpoint for getting coin balance
-      const response = await httpClient.request("GET", "/v5/asset/transfer/query-account-coins-balance", {
-        accountType: "FUND", // P2P uses FUND account type
-        withBonus: "0"
-      });
-
-      if (response.ret_code !== 0) {
-        throw new Error(`Failed to get balance: ${response.ret_msg}`);
-      }
-
-      // Handle response structure for P2P balance
-      const balances = response.result.balance || [];
-      return balances.map((balance: any) => ({
-        coin: balance.coin,
-        free: balance.transferBalance || balance.walletBalance || "0",
-        locked: "0", // Not provided in P2P balance
-        frozen: "0", // Not provided in P2P balance
-      }));
-    } catch (error) {
-      throw new Error(`Failed to get P2P balance: ${error}`);
-    }
+    this.activeAccountId = accountId;
+    this.emit('accountSwitched', { accountId });
   }
 
-  async getAccountInfo(accountId: string): Promise<any> {
-    const httpClient = this.accountManager.getHttpClient(accountId);
-    if (!httpClient) {
-      throw new Error(`Account ${accountId} not found`);
-    }
-
-    try {
-      // Get P2P account information
-      const response = await httpClient.request("POST", "/v5/p2p/user/personal/info", {});
-
-      if (response.ret_code !== 0) {
-        throw new Error(`Failed to get account info: ${response.ret_msg}`);
-      }
-
-      return response.result;
-    } catch (error) {
-      throw new Error(`Failed to get account info: ${error}`);
-    }
+  /**
+   * Get all accounts
+   */
+  getAccounts(): P2PAccount[] {
+    return Array.from(this.accounts.values());
   }
 
-  async getActiveAdvertisements(
-    accountId: string,
-  ): Promise<P2PAdvertisement[]> {
-    const httpClient = this.accountManager.getHttpClient(accountId);
-    if (!httpClient) {
-      throw new Error(`Account ${accountId} not found`);
-    }
-
-    try {
-      // Get online ads - using the correct P2P endpoint
-      const response = await httpClient.request("POST", "/v5/p2p/item/online", {
-        tokenId: "USDT",
-        currencyId: "RUB",
-        side: "0", // 0 for buy ads, 1 for sell ads
-        page: "1",
-        size: "50"
-      });
-
-      if (response.ret_code !== 0) {
-        throw new Error(`Failed to get advertisements: ${response.ret_msg}`);
-      }
-
-      const ads: P2PAdvertisement[] =
-        response.result.items?.map((item: any) => ({
-          advId: item.id,
-          accountId,
-          coin: item.tokenId,
-          fiatCurrency: item.currencyId,
-          side: item.side === 1 || item.side === "1" ? "Sell" : "Buy",
-          price: item.price,
-          minAmount: item.minAmount,
-          maxAmount: item.maxAmount,
-          quantity: item.lastQuantity,
-          paymentMethods: this.parsePaymentMethods(item.payments),
-          paymentPeriod: parseInt(item.paymentPeriod),
-          status: item.status === 10 ? "Active" : "Inactive",
-          hasOrders: false,
-          createdTime: item.createDate,
-        })) || [];
-
-      for (const ad of ads) {
-        ad.hasOrders = await this.checkAdvertisementHasOrders(
-          accountId,
-          ad.advId,
-        );
-      }
-
-      return ads;
-    } catch (error) {
-      throw new Error(`Failed to get advertisements: ${error}`);
-    }
+  /**
+   * Get active account
+   */
+  getActiveAccount(): P2PAccount | null {
+    return this.activeAccountId ? this.accounts.get(this.activeAccountId) || null : null;
   }
 
-  async getPaymentMethods(accountId: string): Promise<PaymentMethod[]> {
-    const httpClient = this.accountManager.getHttpClient(accountId);
-    if (!httpClient) {
-      throw new Error(`Account ${accountId} not found`);
+  /**
+   * Get client for specific account
+   */
+  private getClient(accountId?: string): P2PClient {
+    const id = accountId || this.activeAccountId;
+    if (!id) {
+      throw new Error('No active account');
     }
 
-    try {
-      // Get user payment methods - using the correct P2P endpoint
-      const response = await httpClient.request("POST", "/v5/p2p/user/personal/payment", {});
-
-      if (response.ret_code !== 0) {
-        throw new Error(`Failed to get payment methods: ${response.ret_msg}`);
-      }
-
-      return (
-        response.result?.items?.map((item: any) => ({
-          id: item.id,
-          type: item.paymentType === "75" ? "Tinkoff" : "SBP",
-          accountName: item.accountName,
-          accountNumber: item.account,
-          bankName: item.bankName,
-          isActive: item.status === "1",
-        })) || []
-      );
-    } catch (error) {
-      throw new Error(`Failed to get payment methods: ${error}`);
-    }
-  }
-
-  async checkAdvertisementHasOrders(
-    accountId: string,
-    advId: string,
-  ): Promise<boolean> {
-    const httpClient = this.accountManager.getHttpClient(accountId);
-    if (!httpClient) {
-      throw new Error(`Account ${accountId} not found`);
-    }
-
-    try {
-      // Check orders for the advertisement - using the correct P2P endpoint
-      const response = await httpClient.request("POST", "/v5/p2p/order/simplifyList", {
-        page: 1,
-        size: 100,
-        status: null // Get all statuses
-      });
-
-      if (response.ret_code !== 0) {
-        return false;
-      }
-
-      // Filter orders for this specific advertisement ID
-      const ordersForAd = response.result.items?.filter((order: any) => 
-        order.itemId === advId && 
-        (order.status === 10 || order.status === 20 || order.status === 30)
-      ) || [];
-
-      return ordersForAd.length > 0;
-    } catch (error) {
-      console.error(
-        `Failed to check orders for advertisement ${advId}:`,
-        error,
-      );
-      return false;
-    }
-  }
-
-  async createSellAdvertisement(
-    params: CreateAdvertisementParams,
-  ): Promise<P2PAdvertisement> {
-    const { accountId, price, minTransactionAmount = 15000 } = params;
-
-    const client = this.accountManager.getClient(accountId);
+    const client = this.clients.get(id);
     if (!client) {
-      throw new Error(`Account ${accountId} not found`);
+      throw new Error(`Client not found for account ${id}`);
     }
 
-    const activeAds = await this.getActiveAdvertisements(accountId);
-    const activeCount = activeAds.filter((ad) => ad.status === "Active").length;
+    return client;
+  }
 
-    if (activeCount >= 2) {
-      throw new Error(
-        "Cannot create more than 2 active advertisements per account",
-      );
-    }
-
-    const paymentMethod = await this.selectPaymentMethod(accountId, activeAds);
-    if (!paymentMethod) {
-      throw new Error("No available payment method");
-    }
-
-    const priceDecimal = new Decimal(price);
-    const minAmountDecimal = new Decimal(minTransactionAmount);
-    const totalQuantity = minAmountDecimal.div(priceDecimal).plus(5).toFixed(2);
-
-    try {
-      const httpClient = this.accountManager.getHttpClient(accountId);
-      if (!httpClient) {
-        throw new Error(`Account ${accountId} not found`);
+  /**
+   * Setup event forwarding from client
+   */
+  private setupClientEvents(accountId: string, client: P2PClient): void {
+    client.on('connected', () => {
+      const account = this.accounts.get(accountId);
+      if (account) {
+        account.isActive = true;
+        account.lastSync = new Date();
       }
-      // Create new ad - using the correct P2P endpoint
-      const response = await httpClient.request("POST", "/v5/p2p/ad/post-new", {
-        tokenId: "USDT",
-        currencyId: "RUB",
-        side: "1", // 1 for sell
-        priceType: "1",
-        price: price,
-        quantity: totalQuantity,
-        minAmount: minTransactionAmount.toString(),
-        maxAmount: minTransactionAmount.toString(),
-        paymentPeriod: "15",
-        payments: [paymentMethod.id],
-        remarks: "",
-      });
+      this.emit('accountConnected', { accountId });
+    });
 
-      if (response.ret_code !== 0) {
-        throw new Error(`Failed to create advertisement: ${response.ret_msg}`);
+    client.on('disconnected', () => {
+      const account = this.accounts.get(accountId);
+      if (account) {
+        account.isActive = false;
       }
+      this.emit('accountDisconnected', { accountId });
+    });
 
-      return {
-        advId: response.result.id,
-        accountId,
-        coin: "USDT",
-        fiatCurrency: "RUB",
-        side: "Sell",
-        price: price,
-        minAmount: minTransactionAmount.toString(),
-        maxAmount: minTransactionAmount.toString(),
-        quantity: totalQuantity,
-        paymentMethods: [paymentMethod],
-        paymentPeriod: 15,
-        status: "Active",
-        hasOrders: false,
-        createdTime: new Date().toISOString(),
-      };
-    } catch (error) {
-      throw new Error(`Failed to create advertisement: ${error}`);
-    }
+    client.on('error', (error) => {
+      this.emit('accountError', { accountId, error });
+    });
+
+    client.on('p2pEvent', (event: P2PEvent) => {
+      this.emit('p2pEvent', { ...event, accountId });
+    });
+
+    client.on('orderUpdate', (order) => {
+      this.emit('orderUpdate', { accountId, order });
+    });
+
+    client.on('chatMessage', (message) => {
+      this.emit('chatMessage', { accountId, message });
+    });
   }
 
-  async getOrders(accountId: string, status?: string): Promise<P2POrder[]> {
-    const httpClient = this.accountManager.getHttpClient(accountId);
-    if (!httpClient) {
-      throw new Error(`Account ${accountId} not found`);
-    }
+  // ========== Account Management Methods ==========
 
-    try {
-      // Get orders - using the correct P2P endpoint
-      const response = await httpClient.request("POST", "/v5/p2p/order/simplifyList", {
-        page: 1,
-        size: 50,
-        status: status ? parseInt(status) : null
-      });
-
-      if (response.ret_code !== 0) {
-        throw new Error(`Failed to get orders: ${response.ret_msg}`);
+  /**
+   * Connect all accounts
+   */
+  async connectAll(): Promise<void> {
+    const promises = Array.from(this.clients.entries()).map(async ([accountId, client]) => {
+      try {
+        await client.connect();
+        const account = this.accounts.get(accountId);
+        if (account) {
+          account.isActive = true;
+          account.lastSync = new Date();
+        }
+      } catch (error) {
+        console.error(`Failed to connect account ${accountId}:`, error);
       }
+    });
 
-      return (
-        response.result.items?.map((item: any) => ({
-          orderId: item.id,
-          advId: item.itemId,
-          accountId,
-          side: item.side === "1" ? "Sell" : "Buy",
-          price: item.price,
-          quantity: item.quantity,
-          amount: item.amount,
-          fiatCurrency: item.currencyId,
-          coin: item.tokenId,
-          status: this.mapOrderStatus(item.orderStatus),
-          paymentMethod: this.parsePaymentMethod(item.payment),
-          createdTime: item.createDate,
-          updatedTime: item.updateDate,
-        })) || []
-      );
-    } catch (error) {
-      throw new Error(`Failed to get orders: ${error}`);
+    await Promise.all(promises);
+  }
+
+  /**
+   * Disconnect all accounts
+   */
+  disconnectAll(): void {
+    for (const client of this.clients.values()) {
+      client.disconnect();
     }
   }
 
-  async getOrderMessages(
-    accountId: string,
-    orderId: string,
-  ): Promise<P2PMessage[]> {
-    const httpClient = this.accountManager.getHttpClient(accountId);
-    if (!httpClient) {
-      throw new Error(`Account ${accountId} not found`);
+  /**
+   * Get account info for specific account
+   */
+  async getAccountInfo(accountId?: string): Promise<any> {
+    return await this.getClient(accountId).getAccountInfo();
+  }
+
+  // ========== Advertisement Methods ==========
+
+  /**
+   * Get active advertisements (for specific or all accounts)
+   */
+  async getActiveAdvertisements(
+    filter?: AdvertisementFilter,
+    accountId?: string
+  ): Promise<PaginatedResponse<P2PAdvertisement>> {
+    if (accountId) {
+      return await this.getClient(accountId).getActiveAdvertisements(filter);
     }
 
-    try {
-      // Get chat messages - using the correct P2P endpoint
-      const response = await httpClient.request(
-        "POST",
-        "/v5/p2p/order/chat-msg",
-        {
-          orderId: orderId,
-          page: 1,
-          size: 100
-        },
-      );
-
-      if (response.ret_code !== 0) {
-        throw new Error(`Failed to get messages: ${response.ret_msg}`);
+    // Get from all accounts
+    const results: P2PAdvertisement[] = [];
+    for (const [id, client] of this.clients) {
+      try {
+        const response = await client.getActiveAdvertisements(filter);
+        results.push(...response.list);
+      } catch (error) {
+        console.error(`Failed to get ads for account ${id}:`, error);
       }
-
-      return (
-        response.result.items?.map((item: any) => ({
-          messageId: item.id,
-          orderId: orderId,
-          senderId: item.sendUserId,
-          content: item.message,
-          timestamp: item.createDate,
-          type:
-            item.msgType === "1"
-              ? "text"
-              : item.msgType === "2"
-                ? "image"
-                : "system",
-        })) || []
-      );
-    } catch (error) {
-      throw new Error(`Failed to get messages: ${error}`);
-    }
-  }
-
-  async sendOrderMessage(
-    accountId: string,
-    orderId: string,
-    message: string,
-  ): Promise<void> {
-    const httpClient = this.accountManager.getHttpClient(accountId);
-    if (!httpClient) {
-      throw new Error(`Account ${accountId} not found`);
     }
 
-    try {
-      // Send chat message - using the correct P2P endpoint
-      const response = await httpClient.request(
-        "POST",
-        "/v5/p2p/order/send-chat-msg",
-        {
-          orderId: orderId,
-          message: message,
-          msgType: "1", // 1 for text message
-        },
-      );
-
-      if (response.ret_code !== 0) {
-        throw new Error(`Failed to send message: ${response.ret_msg}`);
-      }
-    } catch (error) {
-      throw new Error(`Failed to send message: ${error}`);
-    }
-  }
-
-  async releaseOrder(accountId: string, orderId: string): Promise<void> {
-    const httpClient = this.accountManager.getHttpClient(accountId);
-    if (!httpClient) {
-      throw new Error(`Account ${accountId} not found`);
-    }
-
-    try {
-      // Release order - using the correct P2P endpoint
-      const response = await httpClient.request("POST", "/v5/p2p/order/release-digital-asset", {
-        orderId: orderId,
-      });
-
-      if (response.ret_code !== 0) {
-        throw new Error(`Failed to release order: ${response.ret_msg}`);
-      }
-    } catch (error) {
-      throw new Error(`Failed to release order: ${error}`);
-    }
-  }
-
-  private async selectPaymentMethod(
-    accountId: string,
-    activeAds: P2PAdvertisement[],
-  ): Promise<PaymentMethod | null> {
-    const allMethods = await this.getPaymentMethods(accountId);
-    const activeMethods = allMethods.filter(
-      (m) => m.isActive && (m.type === "Tinkoff" || m.type === "SBP"),
-    );
-
-    if (activeMethods.length === 0) {
-      return null;
-    }
-
-    const activeAdWithoutOrders = activeAds.find(
-      (ad) => ad.status === "Active" && !ad.hasOrders,
-    );
-
-    if (activeAdWithoutOrders) {
-      const usedMethod = activeAdWithoutOrders.paymentMethods[0];
-      const alternativeMethod = activeMethods.find(
-        (m) => m.type !== usedMethod.type,
-      );
-      return alternativeMethod || null;
-    }
-
-    const tinkoffMethod = activeMethods.find((m) => m.type === "Tinkoff");
-    const sbpMethod = activeMethods.find((m) => m.type === "SBP");
-
-    const lastUsedTinkoff = activeAds.find((ad) =>
-      ad.paymentMethods.some((pm) => pm.type === "Tinkoff"),
-    );
-    const lastUsedSBP = activeAds.find((ad) =>
-      ad.paymentMethods.some((pm) => pm.type === "SBP"),
-    );
-
-    if (!lastUsedTinkoff && tinkoffMethod) return tinkoffMethod;
-    if (!lastUsedSBP && sbpMethod) return sbpMethod;
-
-    if (lastUsedTinkoff && lastUsedSBP) {
-      const tinkoffTime = new Date(lastUsedTinkoff.createdTime).getTime();
-      const sbpTime = new Date(lastUsedSBP.createdTime).getTime();
-      return tinkoffTime > sbpTime ? sbpMethod : tinkoffMethod;
-    }
-
-    return tinkoffMethod || sbpMethod || null;
-  }
-
-  private parsePaymentMethods(payments: any[]): PaymentMethod[] {
-    if (!payments) return [];
-
-    return payments.map((p) => ({
-      id: p.id,
-      type: p.paymentType === "75" ? ("Tinkoff" as const) : ("SBP" as const),
-      accountName: p.accountName,
-      accountNumber: p.account,
-      bankName: p.bankName,
-      isActive: true,
-    }));
-  }
-
-  private parsePaymentMethod(payment: any): PaymentMethod {
     return {
-      id: payment.id,
-      type: payment.paymentType === "75" ? "Tinkoff" : "SBP",
-      accountName: payment.accountName,
-      accountNumber: payment.account,
-      bankName: payment.bankName,
-      isActive: true,
+      list: results,
+      total: results.length,
+      page: 1,
+      pageSize: results.length,
     };
   }
 
-  private mapOrderStatus(status: string): P2POrder["status"] {
-    const statusMap: Record<string, P2POrder["status"]> = {
-      "10": "Pending",
-      "20": "Processing",
-      "30": "Processing",
-      "40": "Completed",
-      "50": "Cancelled",
-      "60": "Appeal",
+  /**
+   * Get my advertisements
+   */
+  async getMyAdvertisements(
+    page: number = 1,
+    pageSize: number = 20,
+    accountId?: string
+  ): Promise<PaginatedResponse<P2PAdvertisement>> {
+    return await this.getClient(accountId).getMyAdvertisements(page, pageSize);
+  }
+
+  /**
+   * Create advertisement
+   */
+  async createAdvertisement(
+    params: CreateAdvertisementParams,
+    accountId?: string
+  ): Promise<P2PAdvertisement> {
+    return await this.getClient(accountId).createAdvertisement(params);
+  }
+
+  /**
+   * Update advertisement
+   */
+  async updateAdvertisement(
+    params: UpdateAdvertisementParams,
+    accountId?: string
+  ): Promise<P2PAdvertisement> {
+    return await this.getClient(accountId).updateAdvertisement(params);
+  }
+
+  /**
+   * Delete advertisement
+   */
+  async deleteAdvertisement(itemId: string, accountId?: string): Promise<void> {
+    return await this.getClient(accountId).deleteAdvertisement(itemId);
+  }
+
+  // ========== Order Methods ==========
+
+  /**
+   * Get orders
+   */
+  async getOrders(
+    filter?: OrderFilter,
+    page: number = 1,
+    pageSize: number = 20,
+    accountId?: string
+  ): Promise<PaginatedResponse<P2POrder>> {
+    if (accountId) {
+      return await this.getClient(accountId).getOrders(filter, page, pageSize);
+    }
+
+    // Get from all accounts
+    const results: P2POrder[] = [];
+    for (const [id, client] of this.clients) {
+      try {
+        const response = await client.getOrders(filter, page, pageSize);
+        results.push(...response.list);
+      } catch (error) {
+        console.error(`Failed to get orders for account ${id}:`, error);
+      }
+    }
+
+    return {
+      list: results,
+      total: results.length,
+      page: 1,
+      pageSize: results.length,
     };
-    return statusMap[status] || "Pending";
+  }
+
+  /**
+   * Get pending orders
+   */
+  async getPendingOrders(
+    page: number = 1,
+    pageSize: number = 20,
+    accountId?: string
+  ): Promise<PaginatedResponse<P2POrder>> {
+    return await this.getClient(accountId).getPendingOrders(page, pageSize);
+  }
+
+  /**
+   * Get order details
+   */
+  async getOrderDetails(orderId: string, accountId?: string): Promise<P2POrder> {
+    return await this.getClient(accountId).getOrderDetails(orderId);
+  }
+
+  /**
+   * Mark order as paid
+   */
+  async markOrderAsPaid(orderId: string, accountId?: string): Promise<void> {
+    return await this.getClient(accountId).markOrderAsPaid(orderId);
+  }
+
+  /**
+   * Release assets
+   */
+  async releaseAssets(orderId: string, accountId?: string): Promise<void> {
+    return await this.getClient(accountId).releaseAssets(orderId);
+  }
+
+  /**
+   * Cancel order
+   */
+  async cancelOrder(orderId: string, reason?: string, accountId?: string): Promise<void> {
+    return await this.getClient(accountId).cancelOrder(orderId, reason);
+  }
+
+  // ========== Chat Methods ==========
+
+  /**
+   * Get chat messages
+   */
+  async getChatMessages(
+    orderId: string,
+    page: number = 1,
+    pageSize: number = 50,
+    accountId?: string
+  ): Promise<PaginatedResponse<ChatMessage>> {
+    return await this.getClient(accountId).getChatMessages(orderId, page, pageSize);
+  }
+
+  /**
+   * Send chat message
+   */
+  async sendChatMessage(params: SendMessageParams, accountId?: string): Promise<ChatMessage> {
+    return await this.getClient(accountId).sendChatMessage(params);
+  }
+
+  /**
+   * Upload file
+   */
+  async uploadFile(
+    orderId: string,
+    fileData: Buffer,
+    fileName: string,
+    accountId?: string
+  ): Promise<any> {
+    return await this.getClient(accountId).uploadFile(orderId, fileData, fileName);
+  }
+
+  // ========== Payment Methods ==========
+
+  /**
+   * Get payment methods
+   */
+  async getPaymentMethods(accountId?: string): Promise<PaymentMethod[]> {
+    return await this.getClient(accountId).getPaymentMethods();
+  }
+
+  /**
+   * Add payment method
+   */
+  async addPaymentMethod(
+    paymentMethod: Omit<PaymentMethod, 'id'>,
+    accountId?: string
+  ): Promise<PaymentMethod> {
+    return await this.getClient(accountId).addPaymentMethod(paymentMethod);
+  }
+
+  /**
+   * Update payment method
+   */
+  async updatePaymentMethod(
+    paymentMethod: PaymentMethod,
+    accountId?: string
+  ): Promise<PaymentMethod> {
+    return await this.getClient(accountId).updatePaymentMethod(paymentMethod);
+  }
+
+  /**
+   * Delete payment method
+   */
+  async deletePaymentMethod(paymentId: string, accountId?: string): Promise<void> {
+    return await this.getClient(accountId).deletePaymentMethod(paymentId);
+  }
+
+  // ========== Polling Methods ==========
+
+  /**
+   * Start order polling for all accounts
+   */
+  startOrderPollingAll(intervalMs: number = 5000): void {
+    for (const client of this.clients.values()) {
+      client.startOrderPolling(intervalMs);
+    }
+  }
+
+  /**
+   * Start chat polling for specific order
+   */
+  startChatPolling(orderId: string, intervalMs: number = 3000, accountId?: string): void {
+    this.getClient(accountId).startChatPolling(orderId, intervalMs);
+  }
+
+  /**
+   * Stop all polling
+   */
+  stopAllPolling(): void {
+    for (const client of this.clients.values()) {
+      client.stopPolling('orders');
+    }
   }
 }

@@ -477,25 +477,26 @@ export class GateClient {
     const response = await this.client.post(
       `${this.baseUrl}/payments/payouts/balance`,
       { amount: amount.toString() },
-      this.getRequestConfig()
+      this.getRequestConfig(),
     );
 
     const status = response.status;
     const responseText = response.data;
 
-    console.log(`[GateClient] Set balance response (status ${status}):`, responseText);
+    console.log(
+      `[GateClient] Set balance response (status ${status}):`,
+      responseText,
+    );
 
     if (!response.status || response.status >= 400) {
       throw new GateApiError(
-        `Не удалось установить баланс: HTTP ${status} - ${JSON.stringify(responseText)}`
+        `Не удалось установить баланс: HTTP ${status} - ${JSON.stringify(responseText)}`,
       );
     }
 
     const data = response.data as GateResponse<any>;
     if (!data.success) {
-      throw new GateApiError(
-        data.error || 'Ошибка установки баланса'
-      );
+      throw new GateApiError(data.error || "Ошибка установки баланса");
     }
 
     console.log(`[GateClient] Баланс успешно установлен: ${amount}`);
@@ -508,18 +509,20 @@ export class GateClient {
    */
   async getPendingTransactions(): Promise<Payout[]> {
     const url = `${this.baseUrl}/payments/payouts?filters%5Bstatus%5D%5B%5D=4&page=1`;
-    
+
     const response = await this.client.get(url, this.getRequestConfig());
     this.checkResponse(response);
 
     const data = response.data as GateResponse<PayoutsResponse>;
     if (!data.success) {
-      throw new GateApiError(data.error || "Ошибка получения ожидающих транзакций");
+      throw new GateApiError(
+        data.error || "Ошибка получения ожидающих транзакций",
+      );
     }
 
     const transactions = data.response!.payouts.data;
     console.log(
-      `[GateClient] Найдено ${transactions.length} транзакций в ожидании (статус 4)`
+      `[GateClient] Найдено ${transactions.length} транзакций в ожидании (статус 4)`,
     );
     return transactions;
   }
@@ -529,16 +532,18 @@ export class GateClient {
    * @param transactionId - ID транзакции для поиска
    * @returns Найденная транзакция или undefined
    */
-  async searchTransactionById(transactionId: string): Promise<Payout | undefined> {
+  async searchTransactionById(
+    transactionId: string,
+  ): Promise<Payout | undefined> {
     const url = `${this.baseUrl}/payments/payouts?search%5Bid%5D=${transactionId}&filters%5Bstatus%5D%5B%5D=4&filters%5Bstatus%5D%5B%5D=5&page=1`;
-    
+
     console.log(`[GateClient] Поиск транзакции ${transactionId}`);
-    
+
     const response = await this.client.get(url, this.getRequestConfig());
     this.checkResponse(response);
 
     const data = response.data as GateResponse<PayoutsResponse>;
-    
+
     if (data.success && data.response) {
       const payouts = data.response.payouts.data;
       if (payouts.length > 0) {
@@ -603,6 +608,17 @@ export class GateClient {
     };
   }
 
+  private getRandomUserAgent(): string {
+    const userAgents = [
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0",
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36",
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36 Edg/108.0.1462.54",
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36 Edg/108.0.1462.54",
+    ];
+    return userAgents[Math.floor(Math.random() * userAgents.length)];
+  }
+
   /**
    * Получает конфигурацию для запроса
    */
@@ -610,8 +626,7 @@ export class GateClient {
     return {
       headers: {
         "Content-Type": "application/json",
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "User-Agent": this.getRandomUserAgent(),
         Referer: "https://panel.gate.cx/",
         Origin: "https://panel.gate.cx",
         Accept: "application/json, text/plain, */*",

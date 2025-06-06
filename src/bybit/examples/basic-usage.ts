@@ -1,50 +1,142 @@
-import { BybitClient } from '../client';
+/**
+ * Basic usage example for Bybit P2P module
+ */
+
+import { P2PClient, P2PConfig } from '../index';
 
 async function basicExample() {
-  const client = new BybitClient();
+  // 1. Create P2P client configuration
+  const config: P2PConfig = {
+    apiKey: 'your-api-key',
+    apiSecret: 'your-api-secret',
+    testnet: true, // Use testnet for testing
+    debugMode: true,
+  };
 
-  const accountId1 = client.addAccount(
-    'your-api-key-1',
-    'your-api-secret-1',
-    true,
-    'Test Account 1'
-  );
+  // 2. Create P2P client
+  const client = new P2PClient(config);
 
-  const accountId2 = client.addAccount(
-    'your-api-key-2',
-    'your-api-secret-2',
-    false,
-    'Main Account'
-  );
+  // 3. Setup event listeners
+  client.on('connected', () => {
+    console.log('Connected to P2P service');
+  });
 
-  console.log('Added accounts:', client.getAllAccounts());
+  client.on('disconnected', () => {
+    console.log('Disconnected from P2P service');
+  });
+
+  client.on('error', (error) => {
+    console.error('P2P Error:', error);
+  });
+
+  client.on('p2pEvent', (event) => {
+    console.log('P2P Event:', event);
+  });
+
+  client.on('orderUpdate', (order) => {
+    console.log('Order Update:', order);
+  });
+
+  client.on('chatMessage', (message) => {
+    console.log('New Chat Message:', message);
+  });
 
   try {
-    const balances = await client.getAllBalances();
-    console.log('All account balances:', balances);
+    // 4. Connect to P2P service
+    await client.connect();
 
-    const p2pBalance = await client.getP2PBalance(accountId1);
-    console.log('P2P Balance for account 1:', p2pBalance);
+    // 5. Get account info
+    const accountInfo = await client.getAccountInfo();
+    console.log('Account Info:', accountInfo);
 
-    const activeAds = await client.getActiveAdvertisements(accountId1);
-    console.log('Active advertisements:', activeAds);
-
-    const paymentMethods = await client.getPaymentMethods(accountId1);
-    console.log('Payment methods:', paymentMethods);
-
-    const newAd = await client.createSellAdvertisement({
-      accountId: accountId1,
-      price: '100.50',
-      minTransactionAmount: 20000
+    // 6. Get active advertisements
+    const ads = await client.getActiveAdvertisements({
+      asset: 'USDT',
+      fiatCurrency: 'USD',
+      side: 'BUY',
     });
-    console.log('Created new advertisement:', newAd);
+    console.log('Active Ads:', ads);
 
-    const orders = await client.getOrders(accountId1);
-    console.log('Orders:', orders);
+    // 7. Get my advertisements
+    const myAds = await client.getMyAdvertisements();
+    console.log('My Ads:', myAds);
+
+    // 8. Create a new advertisement
+    const newAd = await client.createAdvertisement({
+      side: 'SELL',
+      asset: 'USDT',
+      fiatCurrency: 'USD',
+      priceType: 'FIXED',
+      price: '1.02',
+      quantity: '1000',
+      minOrderAmount: '10',
+      maxOrderAmount: '500',
+      paymentIds: ['payment-method-id'],
+      remarks: 'Fast trade, instant release',
+      autoReply: 'Thank you for trading!',
+    });
+    console.log('Created Ad:', newAd);
+
+    // 9. Get pending orders
+    const pendingOrders = await client.getPendingOrders();
+    console.log('Pending Orders:', pendingOrders);
+
+    // 10. Start order polling (WebSocket simulation)
+    client.startOrderPolling(5000); // Poll every 5 seconds
+
+    // 11. Handle a specific order
+    if (pendingOrders.list.length > 0) {
+      const order = pendingOrders.list[0];
+      
+      // Get order details
+      const orderDetails = await client.getOrderDetails(order.orderId);
+      console.log('Order Details:', orderDetails);
+
+      // Get chat messages
+      const messages = await client.getChatMessages(order.orderId);
+      console.log('Chat Messages:', messages);
+
+      // Send a message
+      const sentMessage = await client.sendChatMessage({
+        orderId: order.orderId,
+        message: 'Hello, I am ready to complete this trade.',
+        messageType: 'TEXT',
+      });
+      console.log('Sent Message:', sentMessage);
+
+      // Start chat polling for this order
+      client.startChatPolling(order.orderId, 3000);
+
+      // Mark order as paid (if buyer)
+      if (order.side === 'BUY') {
+        await client.markOrderAsPaid(order.orderId);
+        console.log('Order marked as paid');
+      }
+
+      // Release assets (if seller)
+      if (order.side === 'SELL' && order.status === 'PAID') {
+        await client.releaseAssets(order.orderId);
+        console.log('Assets released');
+      }
+    }
+
+    // 12. Get payment methods
+    const paymentMethods = await client.getPaymentMethods();
+    console.log('Payment Methods:', paymentMethods);
+
+    // Keep the connection alive for 1 minute
+    setTimeout(() => {
+      client.disconnect();
+      console.log('Disconnected after 1 minute');
+    }, 60000);
 
   } catch (error) {
     console.error('Error:', error);
+    client.disconnect();
   }
 }
 
-basicExample();
+// Run the example
+if (require.main === module) {
+  basicExample().catch(console.error);
+}

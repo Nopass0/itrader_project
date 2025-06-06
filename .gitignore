@@ -176,3 +176,5 @@ dist
 
 cookies/
 data/
+
+/generated/prisma

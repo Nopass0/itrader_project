@@ -2,7 +2,7 @@
  * Типы и интерфейсы для Gate.io API
  */
 
-import { Decimal } from 'decimal.js';
+import { Decimal } from "decimal.js";
 
 /**
  * Cookie для хранения сессии
@@ -89,7 +89,7 @@ export enum TransactionStatus {
   PENDING = 4,
   IN_PROGRESS = 5,
   COMPLETED_WITH_RECEIPT = 7,
-  HISTORY = 9
+  HISTORY = 9,
 }
 
 /**
@@ -118,6 +118,7 @@ export interface Payout {
   amount: AmountMap;
   total: AmountMap;
   method: PaymentMethod;
+  wallet: string;
   user?: {
     id: number;
     name: string;
@@ -189,10 +190,10 @@ export class GateApiError extends Error {
   constructor(
     message: string,
     public code?: string,
-    public statusCode?: number
+    public statusCode?: number,
   ) {
     super(message);
-    this.name = 'GateApiError';
+    this.name = "GateApiError";
   }
 }
 
@@ -201,7 +202,7 @@ export class GateApiError extends Error {
  */
 export class CloudflareError extends GateApiError {
   constructor() {
-    super('Cloudflare protection detected', 'CLOUDFLARE_BLOCK', 403);
+    super("Cloudflare protection detected", "CLOUDFLARE_BLOCK", 403);
   }
 }
 
@@ -210,7 +211,7 @@ export class CloudflareError extends GateApiError {
  */
 export class SessionExpiredError extends GateApiError {
   constructor() {
-    super('Session expired', 'SESSION_EXPIRED', 401);
+    super("Session expired", "SESSION_EXPIRED", 401);
   }
 }
 
@@ -219,7 +220,7 @@ export class SessionExpiredError extends GateApiError {
  */
 export class RateLimitError extends GateApiError {
   constructor(public retryAfter: number = 60) {
-    super('Rate limit exceeded', 'RATE_LIMIT', 429);
+    super("Rate limit exceeded", "RATE_LIMIT", 429);
   }
 }
 

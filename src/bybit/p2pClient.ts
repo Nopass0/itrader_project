@@ -1,341 +1,372 @@
-import { AccountManager } from "./accountManager";
-import { TimeSyncManager } from "./utils/timeSync";
-import type {
-  P2PBalance,
-  P2PUserInfo,
-  CounterpartyUserInfo,
-  UserPaymentMethod,
-  P2POrder,
-  P2POrderDetail,
-  ChatMessage,
-  ChatFile,
+/**
+ * Bybit P2P Client
+ * Core client for interacting with Bybit P2P API
+ */
+
+import { EventEmitter } from 'events';
+import { HttpClient } from './utils/httpClient';
+import {
+  P2PConfig,
   P2PAdvertisement,
-  AdDetail,
-  CreateAdParams,
-  UpdateAdParams,
-  AdSearchParams,
-  OrderListParams,
-  P2PApiResponse,
-  PagedResult,
-} from "./types/p2p";
+  CreateAdvertisementParams,
+  UpdateAdvertisementParams,
+  P2POrder,
+  ChatMessage,
+  SendMessageParams,
+  PaymentMethod,
+  ApiResponse,
+  PaginatedResponse,
+  AdvertisementFilter,
+  OrderFilter,
+  P2PEvent,
+  P2PEventType,
+} from './types/p2p';
 
-export class P2PClient {
-  constructor(private accountManager: AccountManager) {}
+export class P2PClient extends EventEmitter {
+  private httpClient: HttpClient;
+  private config: P2PConfig;
+  private pollingIntervals: Map<string, NodeJS.Timeout> = new Map();
+  private isConnected: boolean = false;
 
-  private async makeRequest<T>(
-    accountId: string,
-    method: string,
-    endpoint: string,
-    params: any = {},
-  ): Promise<T> {
-    const httpClient = this.accountManager.getHttpClient(accountId);
-    if (!httpClient) {
-      throw new Error(`Account ${accountId} not found`);
-    }
-
-    const account = this.accountManager.getAccount(accountId);
-    await TimeSyncManager.syncServerTime(account?.isTestnet || false);
-
-    const response = await httpClient.request(method, endpoint, params);
-
-    // P2P endpoints use ret_code instead of retCode
-    const code = response.retCode ?? response.ret_code;
-    const msg = response.retMsg ?? response.ret_msg;
-
-    if (code !== 0 && code !== "0") {
-      throw new Error(`API Error ${code}: ${msg || "Unknown error"}`);
-    }
-
-    // Handle different response structures
-    if (response.result !== undefined) {
-      return response.result;
-    } else if (response.data !== undefined) {
-      return response.data;
-    } else {
-      // For P2P endpoints, the response might be the data itself
-      const { ret_code, ret_msg, retCode, retMsg, ...data } = response;
-      return data;
-    }
+  constructor(config: P2PConfig) {
+    super();
+    this.config = config;
+    this.httpClient = new HttpClient(config);
   }
 
-  // ==================== Balance Endpoints ====================
-
-  async getAllBalances(accountId: string): Promise<P2PBalance[]> {
-    const result = await this.makeRequest<any>(
-      accountId,
-      "GET",
-      "/v5/asset/transfer/query-account-coins-balance",
-      { accountType: "FUND" },
-    );
-
-    // Map the response to P2PBalance format based on actual structure
-    if (result.balance && Array.isArray(result.balance)) {
-      return result.balance.map((b: any) => ({
-        coin: b.coin,
-        free: b.transferBalance || b.walletBalance || "0",
-        locked: "0", // not provided in this endpoint
-        frozen: "0", // not provided in this endpoint
-      }));
-    }
-
-    return [];
-  }
-
-  // ==================== User Info Endpoints ====================
-
-  async getUserInfo(accountId: string): Promise<P2PUserInfo> {
-    const response = await this.makeRequest<any>(
-      accountId,
-      "POST",
-      "/v5/p2p/user/personal/info",
-    );
-
-    // P2P response might have the data nested differently
-    if (response.user) {
-      return response.user;
-    } else if (response.userInfo) {
-      return response.userInfo;
-    }
-    return response;
-  }
-
-  async getCounterpartyInfo(
-    accountId: string,
-    originalUid: string,
-    orderId: string,
-  ): Promise<CounterpartyUserInfo> {
-    return this.makeRequest<CounterpartyUserInfo>(
-      accountId,
-      "POST",
-      "/v5/p2p/user/order/personal/info",
-      { originalUid, orderId },
-    );
-  }
-
-  async getUserPaymentMethods(accountId: string): Promise<UserPaymentMethod[]> {
-    const result = await this.makeRequest<{ result: UserPaymentMethod[] }>(
-      accountId,
-      "POST",
-      "/v5/p2p/user/payment/list",
-    );
-    return result.result || [];
-  }
-
-  // ==================== Order Management Endpoints ====================
-
-  async getOrders(
-    accountId: string,
-    params?: OrderListParams,
-  ): Promise<PagedResult<P2POrder>> {
-    const defaultParams = {
-      page: 1,
-      limit: 20,
-      ...params,
-    };
-
-    return this.makeRequest<PagedResult<P2POrder>>(
-      accountId,
-      "POST",
-      "/v5/p2p/order/simplifyList",
-      defaultParams,
-    );
-  }
-
-  async getOrderDetail(
-    accountId: string,
-    orderId: string,
-  ): Promise<P2POrderDetail> {
-    return this.makeRequest<P2POrderDetail>(
-      accountId,
-      "POST",
-      "/v5/p2p/order/info",
-      { orderId },
-    );
-  }
-
-  async getPendingOrders(accountId: string): Promise<P2POrder[]> {
-    const result = await this.makeRequest<{ list: P2POrder[] }>(
-      accountId,
-      "POST",
-      "/v5/p2p/order/pending/simplifyList",
-      { page: 1, size: 20 },
-    );
-    return result.list || [];
-  }
-
-  async markOrderAsPaid(
-    accountId: string,
-    orderId: string,
-    paymentType: string,
-    paymentId: string,
-  ): Promise<void> {
-    await this.makeRequest(accountId, "POST", "/v5/p2p/order/pay", {
-      orderId,
-      paymentType,
-      paymentId,
-    });
-  }
-
-  async releaseOrder(accountId: string, orderId: string): Promise<void> {
-    await this.makeRequest(accountId, "POST", "/v5/p2p/order/finish", { orderId });
-  }
-
-  async cancelOrder(accountId: string, orderId: string): Promise<void> {
-    await this.makeRequest(accountId, "POST", "/v5/p2p/order/cancel", {
-      orderId,
-    });
-  }
-
-  // ==================== Chat Endpoints ====================
-
-  async sendChatMessage(
-    accountId: string,
-    orderId: string,
-    message: string,
-    contentType: string = "str",
-    msgUuid: string = "",
-    fileName?: string,
-  ): Promise<void> {
-    await this.makeRequest(accountId, "POST", "/v5/p2p/order/message/send", {
-      orderId,
-      message,
-      contentType,
-      msgUuid,
-      fileName,
-    });
-  }
-
-  async uploadChatFile(
-    accountId: string,
-    orderId: string,
-    fileName: string,
-    fileContent: string, // base64 encoded
-  ): Promise<ChatFile> {
-    return this.makeRequest<ChatFile>(accountId, "POST", "/v5/p2p/oss/upload_file", {
-      orderId,
-      fileName,
-      fileContent,
-    });
-  }
-
-  async getChatMessages(
-    accountId: string,
-    orderId: string,
-    page: number = 1,
-    limit: number = 50,
-  ): Promise<PagedResult<ChatMessage>> {
-    return this.makeRequest<PagedResult<ChatMessage>>(
-      accountId,
-      "POST",
-      "/v5/p2p/order/message/listpage",
-      {
-        orderId,
-        currentPage: page,
-        size: limit,
-      },
-    );
-  }
-
-  // ==================== Advertisement Endpoints ====================
-
-  async searchAds(
-    accountId: string,
-    params: AdSearchParams,
-  ): Promise<PagedResult<P2PAdvertisement>> {
-    const defaultParams = {
-      page: 1,
-      size: 10, // default page size
-      ...params,
-    };
-
-    const response = await this.makeRequest<any>(
-      accountId,
-      "POST",
-      "/v5/p2p/item/online",
-      defaultParams,
-    );
-
-    // Response already contains items and count (makeRequest returns result)
-    return {
-      list: response.items || [],
-      count: response.count || 0,
-    };
-  }
-
-  async createAd(
-    accountId: string,
-    params: CreateAdParams,
-  ): Promise<{ itemId: string; securityRiskToken?: string }> {
-    return await this.makeRequest<{
-      itemId: string;
-      securityRiskToken?: string;
-    }>(accountId, "POST", "/v5/p2p/item/create", params);
-  }
-
-  async deleteAd(accountId: string, itemId: string): Promise<void> {
-    await this.makeRequest(accountId, "POST", "/v5/p2p/ad/remove", { itemId });
-  }
-
-  async updateAd(accountId: string, params: UpdateAdParams): Promise<void> {
-    await this.makeRequest(accountId, "POST", "/v5/p2p/ad/update-list", params);
-  }
-
-  async getMyAds(
-    accountId: string,
-    tokenId?: string,
-    fiat?: string,
-  ): Promise<P2PAdvertisement[]> {
-    const params: any = {};
-    if (tokenId) params.tokenId = tokenId;
-    if (fiat) params.fiat = fiat;
-
+  /**
+   * Connect to P2P service (simulates WebSocket connection)
+   */
+  async connect(): Promise<void> {
     try {
-      const result = await this.makeRequest<{ list: P2PAdvertisement[] }>(
-        accountId,
-        "POST",
-        "/v5/p2p/ad/ad-list",
-        params,
-      );
-      return result.list || [];
-    } catch (error: any) {
-      // If the endpoint is not available, return empty array
-      console.error("Error fetching my ads:", error.message);
-      return [];
+      // Test connection by getting account info
+      await this.getAccountInfo();
+      this.isConnected = true;
+      this.emit('connected');
+      
+      if (this.config.debugMode) {
+        console.log('P2P Client connected successfully');
+      }
+    } catch (error) {
+      this.isConnected = false;
+      this.emit('error', error);
+      throw error;
     }
   }
 
-  async getAdDetail(accountId: string, itemId: string): Promise<AdDetail> {
-    return this.makeRequest<AdDetail>(accountId, "POST", "/v5/p2p/item/info", {
-      itemId,
-    });
+  /**
+   * Disconnect from P2P service
+   */
+  disconnect(): void {
+    // Clear all polling intervals
+    for (const [key, interval] of this.pollingIntervals) {
+      clearInterval(interval);
+    }
+    this.pollingIntervals.clear();
+    this.isConnected = false;
+    this.emit('disconnected');
   }
 
-  // ==================== Helper Methods ====================
-
-  async getActiveAds(accountId: string): Promise<P2PAdvertisement[]> {
-    const ads = await this.getMyAds(accountId);
-    return ads.filter((ad) => ad.status === "1");
+  /**
+   * Get account information
+   */
+  async getAccountInfo(): Promise<any> {
+    return await this.httpClient.get('/v5/p2p/account/info');
   }
 
-  async hasActiveOrders(accountId: string): Promise<boolean> {
-    const pendingOrders = await this.getPendingOrders(accountId);
-    return pendingOrders.length > 0;
+  // ========== Advertisement Methods ==========
+
+  /**
+   * Get all active advertisements
+   */
+  async getActiveAdvertisements(filter?: AdvertisementFilter): Promise<PaginatedResponse<P2PAdvertisement>> {
+    const response = await this.httpClient.get<PaginatedResponse<P2PAdvertisement>>(
+      '/v5/p2p/item/online',
+      filter
+    );
+    return response.result;
   }
 
-  async getOrdersByStatus(
-    accountId: string,
-    status: string,
-  ): Promise<P2POrder[]> {
-    const result = await this.getOrders(accountId, { orderStatus: status });
-    return result.list;
+  /**
+   * Get my advertisements
+   */
+  async getMyAdvertisements(page: number = 1, pageSize: number = 20): Promise<PaginatedResponse<P2PAdvertisement>> {
+    const response = await this.httpClient.get<PaginatedResponse<P2PAdvertisement>>(
+      '/v5/p2p/item/personal/list',
+      { page, pageSize }
+    );
+    return response.result;
   }
 
-  async getRecentMessages(
-    accountId: string,
-    orderId: string,
-    count: number = 10,
-  ): Promise<ChatMessage[]> {
-    const result = await this.getChatMessages(accountId, orderId, 1, count);
-    return result.list;
+  /**
+   * Get advertisement details
+   */
+  async getAdvertisementDetails(itemId: string): Promise<P2PAdvertisement> {
+    const response = await this.httpClient.get<P2PAdvertisement>(
+      '/v5/p2p/item/info',
+      { itemId }
+    );
+    return response.result;
+  }
+
+  /**
+   * Create new advertisement
+   */
+  async createAdvertisement(params: CreateAdvertisementParams): Promise<P2PAdvertisement> {
+    const response = await this.httpClient.post<P2PAdvertisement>(
+      '/v5/p2p/item/create',
+      params
+    );
+    
+    const ad = response.result;
+    this.emitEvent('AD_CREATED', ad);
+    return ad;
+  }
+
+  /**
+   * Update advertisement
+   */
+  async updateAdvertisement(params: UpdateAdvertisementParams): Promise<P2PAdvertisement> {
+    const response = await this.httpClient.post<P2PAdvertisement>(
+      '/v5/p2p/item/update',
+      params
+    );
+    
+    const ad = response.result;
+    this.emitEvent('AD_UPDATED', ad);
+    return ad;
+  }
+
+  /**
+   * Delete advertisement
+   */
+  async deleteAdvertisement(itemId: string): Promise<void> {
+    await this.httpClient.post('/v5/p2p/item/cancel', { itemId });
+    this.emitEvent('AD_DELETED', { itemId });
+  }
+
+  // ========== Order Methods ==========
+
+  /**
+   * Get all orders
+   */
+  async getOrders(filter?: OrderFilter, page: number = 1, pageSize: number = 20): Promise<PaginatedResponse<P2POrder>> {
+    const response = await this.httpClient.get<PaginatedResponse<P2POrder>>(
+      '/v5/p2p/order/simplifyList',
+      { ...filter, page, pageSize }
+    );
+    return response.result;
+  }
+
+  /**
+   * Get pending orders
+   */
+  async getPendingOrders(page: number = 1, pageSize: number = 20): Promise<PaginatedResponse<P2POrder>> {
+    const response = await this.httpClient.get<PaginatedResponse<P2POrder>>(
+      '/v5/p2p/order/pending/simplifyList',
+      { page, pageSize }
+    );
+    return response.result;
+  }
+
+  /**
+   * Get order details
+   */
+  async getOrderDetails(orderId: string): Promise<P2POrder> {
+    const response = await this.httpClient.get<P2POrder>(
+      '/v5/p2p/order/info',
+      { orderId }
+    );
+    return response.result;
+  }
+
+  /**
+   * Mark order as paid
+   */
+  async markOrderAsPaid(orderId: string): Promise<void> {
+    await this.httpClient.post('/v5/p2p/order/pay', { orderId });
+    this.emitEvent('ORDER_PAID', { orderId });
+  }
+
+  /**
+   * Release assets (complete order)
+   */
+  async releaseAssets(orderId: string): Promise<void> {
+    await this.httpClient.post('/v5/p2p/order/finish', { orderId });
+    this.emitEvent('ORDER_RELEASED', { orderId });
+  }
+
+  /**
+   * Cancel order
+   */
+  async cancelOrder(orderId: string, reason?: string): Promise<void> {
+    await this.httpClient.post('/v5/p2p/order/cancel', { orderId, reason });
+    this.emitEvent('ORDER_CANCELLED', { orderId });
+  }
+
+  // ========== Chat Methods ==========
+
+  /**
+   * Get chat messages for order
+   */
+  async getChatMessages(orderId: string, page: number = 1, pageSize: number = 50): Promise<PaginatedResponse<ChatMessage>> {
+    const response = await this.httpClient.get<PaginatedResponse<ChatMessage>>(
+      '/v5/p2p/order/message/list',
+      { orderId, page, pageSize }
+    );
+    return response.result;
+  }
+
+  /**
+   * Send chat message
+   */
+  async sendChatMessage(params: SendMessageParams): Promise<ChatMessage> {
+    const response = await this.httpClient.post<ChatMessage>(
+      '/v5/p2p/order/message/send',
+      params
+    );
+    
+    const message = response.result;
+    this.emitEvent('MESSAGE_RECEIVED', message);
+    return message;
+  }
+
+  /**
+   * Upload file to chat
+   */
+  async uploadFile(orderId: string, fileData: Buffer, fileName: string): Promise<any> {
+    // Note: This would require multipart/form-data upload
+    // Implementation depends on exact API requirements
+    const response = await this.httpClient.post<any>(
+      '/v5/p2p/order/file/upload',
+      { orderId, fileData, fileName }
+    );
+    return response.result;
+  }
+
+  // ========== Payment Methods ==========
+
+  /**
+   * Get my payment methods
+   */
+  async getPaymentMethods(): Promise<PaymentMethod[]> {
+    const response = await this.httpClient.get<PaymentMethod[]>(
+      '/v5/p2p/payment/list'
+    );
+    return response.result;
+  }
+
+  /**
+   * Add payment method
+   */
+  async addPaymentMethod(paymentMethod: Omit<PaymentMethod, 'id'>): Promise<PaymentMethod> {
+    const response = await this.httpClient.post<PaymentMethod>(
+      '/v5/p2p/payment/add',
+      paymentMethod
+    );
+    return response.result;
+  }
+
+  /**
+   * Update payment method
+   */
+  async updatePaymentMethod(paymentMethod: PaymentMethod): Promise<PaymentMethod> {
+    const response = await this.httpClient.post<PaymentMethod>(
+      '/v5/p2p/payment/update',
+      paymentMethod
+    );
+    return response.result;
+  }
+
+  /**
+   * Delete payment method
+   */
+  async deletePaymentMethod(paymentId: string): Promise<void> {
+    await this.httpClient.post('/v5/p2p/payment/delete', { paymentId });
+  }
+
+  // ========== Polling Methods (WebSocket simulation) ==========
+
+  /**
+   * Start polling for order updates
+   */
+  startOrderPolling(intervalMs: number = 5000): void {
+    if (this.pollingIntervals.has('orders')) {
+      return;
+    }
+
+    const interval = setInterval(async () => {
+      try {
+        const orders = await this.getPendingOrders();
+        for (const order of orders.list) {
+          this.emit('orderUpdate', order);
+        }
+      } catch (error) {
+        this.emit('error', error);
+      }
+    }, intervalMs);
+
+    this.pollingIntervals.set('orders', interval);
+  }
+
+  /**
+   * Start polling for chat messages
+   */
+  startChatPolling(orderId: string, intervalMs: number = 3000): void {
+    const key = `chat_${orderId}`;
+    if (this.pollingIntervals.has(key)) {
+      return;
+    }
+
+    let lastMessageId: string | null = null;
+
+    const interval = setInterval(async () => {
+      try {
+        const messages = await this.getChatMessages(orderId);
+        for (const message of messages.list) {
+          if (!lastMessageId || message.messageId > lastMessageId) {
+            this.emit('chatMessage', message);
+            lastMessageId = message.messageId;
+          }
+        }
+      } catch (error) {
+        this.emit('error', error);
+      }
+    }, intervalMs);
+
+    this.pollingIntervals.set(key, interval);
+  }
+
+  /**
+   * Stop polling for specific key
+   */
+  stopPolling(key: string): void {
+    const interval = this.pollingIntervals.get(key);
+    if (interval) {
+      clearInterval(interval);
+      this.pollingIntervals.delete(key);
+    }
+  }
+
+  // ========== Helper Methods ==========
+
+  /**
+   * Emit P2P event
+   */
+  private emitEvent(type: P2PEventType, data: any): void {
+    const event: P2PEvent = {
+      type,
+      accountId: this.config.apiKey,
+      data,
+      timestamp: Date.now(),
+    };
+    this.emit('p2pEvent', event);
+  }
+
+  /**
+   * Check if connected
+   */
+  isConnected(): boolean {
+    return this.isConnected;
   }
 }
