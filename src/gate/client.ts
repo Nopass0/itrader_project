@@ -509,21 +509,37 @@ export class GateClient {
    */
   async getPendingTransactions(): Promise<Payout[]> {
     const url = `${this.baseUrl}/payments/payouts?filters%5Bstatus%5D%5B%5D=4&page=1`;
+    console.log(`[GateClient] Fetching pending transactions from: ${url}`);
 
     const response = await this.client.get(url, this.getRequestConfig());
+    console.log(`[GateClient] Response status: ${response.status}`);
+    console.log(`[GateClient] Response data:`, JSON.stringify(response.data, null, 2));
+    
     this.checkResponse(response);
 
     const data = response.data as GateResponse<PayoutsResponse>;
     if (!data.success) {
+      console.error(`[GateClient] API returned success=false:`, data);
       throw new GateApiError(
         data.error || "Ошибка получения ожидающих транзакций",
       );
     }
 
-    const transactions = data.response!.payouts.data;
+    if (!data.response || !data.response.payouts || !data.response.payouts.data) {
+      console.error(`[GateClient] Unexpected response structure:`, data);
+      throw new GateApiError("Неожиданная структура ответа от API");
+    }
+
+    const transactions = data.response.payouts.data;
     console.log(
       `[GateClient] Найдено ${transactions.length} транзакций в ожидании (статус 4)`,
     );
+    
+    // Log first transaction for debugging
+    if (transactions.length > 0) {
+      console.log(`[GateClient] First transaction:`, JSON.stringify(transactions[0], null, 2));
+    }
+    
     return transactions;
   }
 

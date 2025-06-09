@@ -83,6 +83,7 @@ export class GateAccountManager {
     email: string,
     password: string,
     autoLogin: boolean = true,
+    accountId?: string,
   ): Promise<LoginResponse | undefined> {
     // Проверяем, не добавлен ли уже аккаунт
     if (this.accounts.has(email)) {
@@ -102,32 +103,57 @@ export class GateAccountManager {
     const client = new GateClient(this.rateLimiter, this.clientOptions);
 
     // Пытаемся загрузить существующие cookies
-    const cookiesPath = this.getCookiesPath(email);
-    try {
-      const cookies = await loadCookiesFromFile(cookiesPath);
-      if (cookies.length > 0) {
-        client.setCookies(cookies);
-        account.cookies = cookies;
-        console.log(
-          `[GateAccountManager] Загружено ${cookies.length} cookies для ${email}`,
-        );
-
-        // Проверяем, работают ли cookies
-        if (await client.isAuthenticated()) {
+    // Сначала пробуем по accountId если он есть
+    let cookiesLoaded = false;
+    if (accountId) {
+      const accountIdPath = path.join(this.cookiesDir, `${accountId}.json`);
+      try {
+        const cookies = await loadCookiesFromFile(accountIdPath);
+        if (cookies.length > 0) {
+          client.setCookies(cookies);
+          account.cookies = cookies;
           console.log(
-            `[GateAccountManager] Аккаунт ${email} уже авторизован через cookies`,
+            `[GateAccountManager] Загружено ${cookies.length} cookies для accountId ${accountId}`,
           );
-          this.accounts.set(email, account);
-          this.clients.set(email, client);
-          return {
-            userId: "from_cookies",
-            sessionId: "from_cookies",
-            expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
-          };
+          cookiesLoaded = true;
         }
+      } catch (error: unknown) {
+        // Игнорируем ошибки загрузки cookies по accountId
       }
-    } catch (error: unknown) {
-      // Игнорируем ошибки загрузки cookies
+    }
+    
+    // Если не загрузили по accountId, пробуем по email
+    if (!cookiesLoaded) {
+      const cookiesPath = this.getCookiesPath(email);
+      try {
+        const cookies = await loadCookiesFromFile(cookiesPath);
+        if (cookies.length > 0) {
+          client.setCookies(cookies);
+          account.cookies = cookies;
+          console.log(
+            `[GateAccountManager] Загружено ${cookies.length} cookies для ${email}`,
+          );
+          cookiesLoaded = true;
+        }
+      } catch (error: unknown) {
+        // Игнорируем ошибки загрузки cookies
+      }
+    }
+
+    if (cookiesLoaded) {
+      // Проверяем, работают ли cookies
+      if (await client.isAuthenticated()) {
+        console.log(
+          `[GateAccountManager] Аккаунт ${email} уже авторизован через cookies`,
+        );
+        this.accounts.set(email, account);
+        this.clients.set(email, client);
+        return {
+          userId: "from_cookies",
+          sessionId: "from_cookies",
+          expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+        };
+      }
     }
 
     this.accounts.set(email, account);
@@ -452,12 +478,14 @@ export class GateAccountManager {
    * @returns Массив с информацией об аккаунтах
    */
   getAccounts(): Array<{
+    id: string;
     email: string;
     isActive: boolean;
     lastUsed?: Date;
     hasCookies: boolean;
   }> {
     return Array.from(this.accounts.entries()).map(([email, account]) => ({
+      id: email, // Use email as ID for compatibility
       email,
       isActive: account.isActive || false,
       lastUsed: account.lastUsed,

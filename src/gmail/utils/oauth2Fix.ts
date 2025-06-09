@@ -31,17 +31,60 @@ export function createOAuth2Manager(
 
 /**
  * Extracts authorization code from redirect URL
- * @param url - The full redirect URL
+ * @param url - The full redirect URL (possibly URL-encoded)
  * @returns The authorization code or null
  */
 export function extractCodeFromUrl(url: string): string | null {
   try {
-    const urlObj = new URL(url);
-    return urlObj.searchParams.get("code");
+    // First try to decode the URL if it's encoded
+    let decodedUrl = url;
+    if (url.includes("%")) {
+      try {
+        decodedUrl = decodeURIComponent(url);
+      } catch {
+        // If decoding fails, use original
+      }
+    }
+    
+    // Try to parse as URL
+    const urlObj = new URL(decodedUrl);
+    let code = urlObj.searchParams.get("code");
+    
+    // If code is still encoded, decode it
+    if (code && code.includes("%")) {
+      try {
+        code = decodeURIComponent(code);
+      } catch {
+        // Use as is if decoding fails
+      }
+    }
+    
+    return code;
   } catch {
     // Try to extract code using regex as fallback
-    const match = url.match(/[?&]code=([^&]+)/);
-    return match ? match[1] : null;
+    let decodedUrl = url;
+    if (url.includes("%")) {
+      try {
+        decodedUrl = decodeURIComponent(url);
+      } catch {
+        // Use original if decoding fails
+      }
+    }
+    
+    const match = decodedUrl.match(/[?&]code=([^&]+)/);
+    if (match) {
+      let code = match[1];
+      // Decode if needed
+      if (code.includes("%")) {
+        try {
+          code = decodeURIComponent(code);
+        } catch {
+          // Use as is
+        }
+      }
+      return code;
+    }
+    return null;
   }
 }
 

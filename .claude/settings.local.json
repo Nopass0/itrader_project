@@ -41,7 +41,11 @@
       "Bash(bun db:push:*)",
       "Bash(./start.sh:*)",
       "Bash(sudo:*)",
-      "Bash(sudo systemctl restart:*)"
+      "Bash(sudo systemctl restart:*)",
+      "Bash(sqlite3:*)",
+      "Bash(touch:*)",
+      "Bash(npx ts-node:*)",
+      "Bash(npx tsx:*)"
     ],
     "deny": []
   }

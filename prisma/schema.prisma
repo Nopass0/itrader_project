@@ -15,144 +15,145 @@ datasource db {
 }
 
 model Payout {
-  id               String   @id @default(cuid())
-  gatePayoutId     Int      @unique
-  paymentMethodId  Int
-  wallet           String
-  amountTrader     Json     // {"643": 40320, "000001": 502.56}
-  totalTrader      Json     // {"643": 41207.04, "000001": 513.61}
-  status           Int      // 5 = expired, etc
-  approvedAt       DateTime?
-  expiredAt        DateTime?
-  createdAt        DateTime
-  updatedAt        DateTime
-  meta             Json     // courses, reason
-  method           Json     // payment method details
-  attachments      Json     // array of attachments
-  tooltip          Json     // payments success/rejected info
-  bank             Json     // bank details
-  trader           Json     // trader info
-  gateAccount      String   // account identifier
-  
+  id              String    @id @default(cuid())
+  gatePayoutId    Int       @unique
+  paymentMethodId Int
+  wallet          String
+  amountTrader    Json // {"643": 40320, "000001": 502.56}
+  totalTrader     Json // {"643": 41207.04, "000001": 513.61}
+  status          Int // 5 = expired, etc
+  approvedAt      DateTime?
+  expiredAt       DateTime?
+  createdAt       DateTime
+  updatedAt       DateTime
+  meta            Json // courses, reason
+  method          Json // payment method details
+  attachments     Json // array of attachments
+  tooltip         Json // payments success/rejected info
+  bank            Json // bank details
+  trader          Json // trader info
+  gateAccount     String // account identifier
+
   // Relations
-  transaction      Transaction?
-  
+  transaction Transaction?
+
   @@index([status])
   @@index([gateAccount])
   @@index([gatePayoutId])
 }
 
 model BybitAdvertisement {
-  id               String   @id @default(cuid())
-  bybitAdId        String   @unique
-  bybitAccountId   String
-  side             String   // BUY or SELL
-  asset            String
-  fiatCurrency     String
-  price            String
-  quantity         String
-  minOrderAmount   String
-  maxOrderAmount   String
-  paymentMethod    String   // SBP or Tinkoff
-  status           String   // ONLINE, OFFLINE, DELETED
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
-  
+  id             String   @id @default(cuid())
+  bybitAdId      String   @unique
+  bybitAccountId String
+  side           String // BUY or SELL
+  asset          String
+  fiatCurrency   String
+  price          String
+  quantity       String
+  minOrderAmount String
+  maxOrderAmount String
+  paymentMethod  String // SBP or Tinkoff
+  status         String // ONLINE, OFFLINE, DELETED
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
   // Relations
-  transaction      Transaction?
-  
+  transaction Transaction?
+
   @@index([bybitAccountId])
   @@index([status])
 }
 
 model Transaction {
-  id               String   @id @default(cuid())
-  payoutId         String   @unique
-  advertisementId  String   @unique
-  orderId          String?  // Bybit order ID when someone accepts the ad
-  status           String   // pending, chat_started, waiting_payment, payment_received, completed, failed, blacklisted
-  chatStep         Int      @default(0) // Current step in chat automation
-  paymentSentAt    DateTime? // When we sent payment details
-  checkReceivedAt  DateTime? // When we received the check
-  completedAt      DateTime? // When transaction was completed
-  failureReason    String?
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
-  
+  id              String    @id @default(cuid())
+  payoutId        String    @unique
+  advertisementId String    @unique
+  orderId         String? // Bybit order ID when someone accepts the ad
+  status          String // pending, chat_started, waiting_payment, payment_received, completed, failed, blacklisted
+  chatStep        Int       @default(0) // Current step in chat automation
+  paymentSentAt   DateTime? // When we sent payment details
+  checkReceivedAt DateTime? // When we received the check
+  completedAt     DateTime? // When transaction was completed
+  failureReason   String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
   // Relations
-  payout           Payout   @relation(fields: [payoutId], references: [id])
-  advertisement    BybitAdvertisement @relation(fields: [advertisementId], references: [id])
-  chatMessages     ChatMessage[]
-  
+  payout        Payout             @relation(fields: [payoutId], references: [id])
+  advertisement BybitAdvertisement @relation(fields: [advertisementId], references: [id])
+  chatMessages  ChatMessage[]
+
   @@index([status])
 }
 
 model ChatMessage {
-  id               String   @id @default(cuid())
-  transactionId    String
-  messageId        String   // Bybit message ID
-  sender           String   // us or counterparty
-  content          String
-  messageType      String   // TEXT, IMAGE, FILE
-  isProcessed      Boolean  @default(false)
-  createdAt        DateTime @default(now())
-  
+  id            String   @id @default(cuid())
+  transactionId String
+  messageId     String // Bybit message ID
+  sender        String // us or counterparty
+  content       String
+  messageType   String // TEXT, IMAGE, FILE
+  isProcessed   Boolean  @default(false)
+  createdAt     DateTime @default(now())
+
   // Relations
-  transaction      Transaction @relation(fields: [transactionId], references: [id])
-  
+  transaction Transaction @relation(fields: [transactionId], references: [id])
+
   @@index([transactionId])
   @@index([isProcessed])
 }
 
 model GateAccount {
-  id               String   @id @default(cuid())
-  accountId        String   @unique
-  email            String
-  apiKey           String
-  apiSecret        String
-  isActive         Boolean  @default(true)
-  lastSync         DateTime?
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  id        String    @id @default(cuid())
+  accountId String    @unique
+  email     String
+  password  String //raw password
+  apiKey    String
+  apiSecret String
+  isActive  Boolean   @default(true)
+  lastSync  DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
 }
 
 model BybitAccount {
-  id               String   @id @default(cuid())
-  accountId        String   @unique
-  apiKey           String
-  apiSecret        String
-  isActive         Boolean  @default(true)
-  activeAdsCount   Int      @default(0)
-  lastSync         DateTime?
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  id             String    @id @default(cuid())
+  accountId      String    @unique
+  apiKey         String
+  apiSecret      String
+  isActive       Boolean   @default(true)
+  activeAdsCount Int       @default(0)
+  lastSync       DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 }
 
 model GmailAccount {
-  id               String   @id @default(cuid())
-  email            String   @unique
-  refreshToken     String
-  isActive         Boolean  @default(true)
-  lastSync         DateTime?
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  id           String    @id @default(cuid())
+  email        String    @unique
+  refreshToken String
+  isActive     Boolean   @default(true)
+  lastSync     DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 }
 
 model BlacklistedTransaction {
-  id               String   @id @default(cuid())
-  payoutId         String
-  reason           String
-  wallet           String?
-  amount           String?
-  createdAt        DateTime @default(now())
-  
+  id        String   @id @default(cuid())
+  payoutId  String
+  reason    String
+  wallet    String?
+  amount    String?
+  createdAt DateTime @default(now())
+
   @@index([wallet])
 }
 
 model SystemSettings {
-  id               String   @id @default(cuid())
-  key              String   @unique
-  value            String
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }

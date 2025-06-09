@@ -71,7 +71,8 @@ export class P2PClient extends EventEmitter {
    * Get account information
    */
   async getAccountInfo(): Promise<any> {
-    return await this.httpClient.post('/v5/p2p/user/personal/info', {});
+    // Don't send empty object, send undefined or null for empty body
+    return await this.httpClient.post('/v5/p2p/user/personal/info');
   }
 
   // ========== Advertisement Methods ==========
@@ -82,7 +83,7 @@ export class P2PClient extends EventEmitter {
   async getActiveAdvertisements(filter?: AdvertisementFilter): Promise<PaginatedResponse<P2PAdvertisement>> {
     const response = await this.httpClient.post<PaginatedResponse<P2PAdvertisement>>(
       '/v5/p2p/item/online',
-      filter || {}
+      filter
     );
     return response.result;
   }
@@ -111,16 +112,17 @@ export class P2PClient extends EventEmitter {
 
   /**
    * Create new advertisement
+   * Note: Bybit's create API only returns itemId and security fields, not full advertisement details
    */
-  async createAdvertisement(params: CreateAdvertisementParams): Promise<P2PAdvertisement> {
-    const response = await this.httpClient.post<P2PAdvertisement>(
+  async createAdvertisement(params: CreateAdvertisementParams): Promise<any> {
+    const response = await this.httpClient.post<any>(
       '/v5/p2p/item/create',
       params
     );
     
-    const ad = response.result;
-    this.emitEvent('AD_CREATED', ad);
-    return ad;
+    const result = response.result;
+    this.emitEvent('AD_CREATED', result);
+    return result;
   }
 
   /**
@@ -254,6 +256,11 @@ export class P2PClient extends EventEmitter {
       '/v5/p2p/user/payment/list',
       {}
     );
+    
+    if (this.config.debugMode) {
+      console.log('[P2PClient] Raw payment methods response:', JSON.stringify(response, null, 2));
+    }
+    
     return response.result;
   }
 

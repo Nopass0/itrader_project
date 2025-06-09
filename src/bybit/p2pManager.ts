@@ -250,14 +250,25 @@ export class P2PManager extends EventEmitter {
   ): Promise<PaginatedResponse<P2PAdvertisement>> {
     return await this.getClient(accountId).getMyAdvertisements(page, pageSize);
   }
+  
+  /**
+   * Get advertisement details
+   */
+  async getAdvertisementDetails(
+    itemId: string,
+    accountId?: string
+  ): Promise<P2PAdvertisement> {
+    return await this.getClient(accountId).getAdvertisementDetails(itemId);
+  }
 
   /**
    * Create advertisement
+   * Note: Returns Bybit's response which only contains itemId and security fields
    */
   async createAdvertisement(
     params: CreateAdvertisementParams,
     accountId?: string
-  ): Promise<P2PAdvertisement> {
+  ): Promise<any> {
     return await this.getClient(accountId).createAdvertisement(params);
   }
 

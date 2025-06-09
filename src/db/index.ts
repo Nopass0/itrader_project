@@ -100,13 +100,22 @@ class DatabaseClient {
     gateAccount: string,
   ): Promise<Payout> {
     return await this.executeWithRetry(async () => {
+      // Handle empty amount arrays for pending transactions
+      const amountTrader = Array.isArray(gatePayoutData.amount) && gatePayoutData.amount.length === 0 
+        ? {} 
+        : (gatePayoutData.amount?.trader || {});
+      
+      const totalTrader = Array.isArray(gatePayoutData.total) && gatePayoutData.total.length === 0 
+        ? {} 
+        : (gatePayoutData.total?.trader || {});
+
       return await this.prisma.payout.upsert({
         where: { gatePayoutId: gatePayoutData.id },
         update: {
           paymentMethodId: gatePayoutData.payment_method_id,
           wallet: gatePayoutData.wallet,
-          amountTrader: gatePayoutData.amount.trader,
-          totalTrader: gatePayoutData.total.trader,
+          amountTrader,
+          totalTrader,
           status: gatePayoutData.status,
           approvedAt: gatePayoutData.approved_at ? new Date(gatePayoutData.approved_at) : null,
           expiredAt: gatePayoutData.expired_at ? new Date(gatePayoutData.expired_at) : null,
@@ -123,8 +132,8 @@ class DatabaseClient {
           gatePayoutId: gatePayoutData.id,
           paymentMethodId: gatePayoutData.payment_method_id,
           wallet: gatePayoutData.wallet,
-          amountTrader: gatePayoutData.amount.trader,
-          totalTrader: gatePayoutData.total.trader,
+          amountTrader,
+          totalTrader,
           status: gatePayoutData.status,
           approvedAt: gatePayoutData.approved_at ? new Date(gatePayoutData.approved_at) : null,
           expiredAt: gatePayoutData.expired_at ? new Date(gatePayoutData.expired_at) : null,

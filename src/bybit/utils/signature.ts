@@ -3,6 +3,7 @@
  */
 
 import crypto from 'crypto';
+import { TimeSync } from './timeSync';
 
 export class SignatureUtils {
   /**
@@ -42,6 +43,7 @@ export class SignatureUtils {
    * Get current timestamp in milliseconds
    */
   static getTimestamp(): string {
-    return Date.now().toString();
+    // Use synchronized time to handle system clock offset
+    return TimeSync.getTimestamp();
   }
 }

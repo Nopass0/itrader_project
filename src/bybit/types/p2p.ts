@@ -36,19 +36,20 @@ export interface P2PAdvertisement {
 }
 
 export interface CreateAdvertisementParams {
-  side: 'BUY' | 'SELL';
-  asset: string;
-  fiatCurrency: string;
-  priceType: 'FIXED' | 'FLOAT';
-  price?: string;
-  floatRate?: number;
-  quantity: string;
-  minOrderAmount: string;
-  maxOrderAmount: string;
-  paymentIds: string[];
-  remarks?: string;
-  autoReply?: string;
-  targetUserId?: string;
+  tokenId: string; // The cryptocurrency ID (e.g., "USDT")
+  currencyId: string; // The fiat currency ID (e.g., "RUB")
+  side: '0' | '1'; // 0=BUY, 1=SELL
+  priceType: '0' | '1'; // 0=FIXED, 1=FLOAT
+  price: string; // Fixed price or empty string for float
+  premium?: string; // Premium percentage for float price (empty for fixed)
+  minAmount: string; // Minimum order amount in fiat
+  maxAmount: string; // Maximum order amount in fiat
+  quantity: string; // Total quantity in crypto
+  paymentIds: string[]; // Array of payment method IDs
+  remark?: string; // Advertisement remarks/description
+  paymentPeriod: string; // Payment time limit in minutes (as string)
+  itemType?: 'NORMAL' | 'ORIGIN'; // Default: 'ORIGIN'
+  tradingPreferenceSet?: Record<string, any>; // Trading preferences object
 }
 
 export interface UpdateAdvertisementParams {
@@ -154,8 +155,14 @@ export interface ApiResponse<T> {
   retCode: number;
   retMsg: string;
   result: T;
-  retExtInfo: Record<string, any>;
-  time: number;
+  retExtInfo?: Record<string, any>;
+  time?: number;
+  // Support old API format
+  ret_code?: number;
+  ret_msg?: string;
+  ext_code?: string;
+  ext_info?: any;
+  time_now?: string;
 }
 
 export interface PaginatedResponse<T> {

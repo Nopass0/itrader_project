@@ -12,3 +12,4 @@ export * from './types/p2p';
 // Export utilities
 export { SignatureUtils } from './utils/signature';
 export { HttpClient } from './utils/httpClient';
+export { TimeSync } from './utils/timeSync';

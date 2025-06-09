@@ -501,7 +501,7 @@ async function setupGmailAccount() {
     const credentialsContent = JSON.parse(await fs.readFile(credentialsPath, 'utf-8'));
     
     // Extract OAuth2 credentials (could be under 'installed' or 'web' key)
-    const credentials = credentialsContent.installed || credentialsContent.web || credentialsContent;
+    const credentials = credentialsContent.web || credentialsContent.installed || credentialsContent;
     
     if (!credentials.client_id || !credentials.client_secret) {
       console.error("\nError: Invalid credentials file!");
@@ -516,11 +516,24 @@ async function setupGmailAccount() {
     }
     
     // Import necessary utilities
-    const { createOAuth2Manager, extractCodeFromUrl } = await import("./gmail/utils/oauth2Fix");
+    const { extractCodeFromUrl } = await import("./gmail/utils/oauth2Fix");
+    const { google } = await import("googleapis");
     
-    // Create OAuth2Manager with proper configuration
-    const oauth2Manager = createOAuth2Manager(credentials);
-    const authUrl = oauth2Manager.getAuthUrl();
+    // Create OAuth2 client for generating auth URL
+    const tempOAuth2Client = new google.auth.OAuth2(
+      credentials.client_id,
+      credentials.client_secret,
+      "http://localhost"
+    );
+    
+    const authUrl = tempOAuth2Client.generateAuthUrl({
+      access_type: "offline",
+      scope: [
+        "https://www.googleapis.com/auth/gmail.readonly",
+        "https://www.googleapis.com/auth/gmail.modify",
+      ],
+      prompt: "consent",
+    });
     
     console.log("\n🌐 Authorization Required");
     console.log("========================");
@@ -555,62 +568,161 @@ async function setupGmailAccount() {
     // Extract code from input (could be full URL or just the code)
     let code = input.trim();
     
+    // Decode URL-encoded input first
+    try {
+      const decodedInput = decodeURIComponent(input.trim());
+      if (decodedInput !== input.trim()) {
+        console.log("\n🔧 URL-encoded input detected, decoding...");
+        code = decodedInput;
+      }
+    } catch (e) {
+      // If decoding fails, use original input
+    }
+    
     // Check if input looks like a URL
-    if (input.includes("http") || input.includes("code=")) {
-      const extracted = extractCodeFromUrl(input);
+    if (code.includes("http") || code.includes("code=")) {
+      const extracted = extractCodeFromUrl(code);
       if (extracted) {
         code = extracted;
         console.log("\n✅ Code extracted from URL");
       }
     }
     
+    // Additional decoding if the code itself is encoded
+    if (code.includes("%")) {
+      try {
+        code = decodeURIComponent(code);
+        console.log("✅ Code was URL-encoded, decoded it");
+      } catch (e) {
+        // If decoding fails, use as is
+      }
+    }
+    
     console.log("\nExchanging code for tokens...");
     
+    let tokenData: any = null;
+    
     try {
-      const tokens = await oauth2Manager.getTokenFromCode(code);
+      // Direct token exchange using Google API
+      const { google } = await import("googleapis");
       
-      if (!tokens.refresh_token) {
-        console.warn("\n⚠️  Warning: No refresh token received.");
-        console.log("This might happen if you've authorized this app before.");
-        console.log("You may need to revoke access and try again:");
-        console.log("https://myaccount.google.com/permissions\n");
+      // Create OAuth2 client with exact redirect URI
+      const oauth2Client = new google.auth.OAuth2(
+        credentials.client_id,
+        credentials.client_secret,
+        "http://localhost"  // Use exact redirect URI
+      );
+      
+      // Exchange code for tokens manually to avoid PKCE issues
+      const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: new URLSearchParams({
+          code: code,
+          client_id: credentials.client_id,
+          client_secret: credentials.client_secret,
+          redirect_uri: "http://localhost",
+          grant_type: "authorization_code"
+        }).toString()
+      });
+      
+      tokenData = await tokenResponse.json();
+      
+      if (!tokenResponse.ok) {
+        throw new Error(tokenData.error || "Token exchange failed");
       }
       
-      // Create client and get profile
-      const client = new GmailClient(oauth2Manager);
-      await client.setTokens(tokens);
-      const profile = await client.getUserProfile();
+      const tokens = tokenData;
+      
+      if (!tokens.access_token || !tokens.refresh_token) {
+        throw new Error("Missing required tokens");
+      }
+      
+      console.log("\n✅ Tokens received successfully!");
+      
+      // Set credentials and get user info
+      oauth2Client.setCredentials(tokens);
+      const gmail = google.gmail({ version: "v1", auth: oauth2Client });
+      const profile = await gmail.users.getProfile({ userId: "me" });
+      const email = profile.data.emailAddress || "unknown";
+      
+      console.log(`✅ Connected to Gmail account: ${email}`);
       
       // Save to database
       await db.upsertGmailAccount({
-        email: profile.emailAddress || "unknown",
-        refreshToken: tokens.refresh_token || "",
+        email,
+        refreshToken: tokens.refresh_token,
       });
       
-      console.log(`\n✓ Gmail account ${profile.emailAddress} setup successfully!`);
+      console.log("✅ Saved to database");
       
-      // Test the connection
-      console.log("\nTesting email access...");
+      // Save backup of all tokens
+      const tokensDir = path.join("data", "gmail-tokens");
+      await fs.mkdir(tokensDir, { recursive: true });
+      const tokensPath = path.join(tokensDir, `${email}.json`);
+      await fs.writeFile(tokensPath, JSON.stringify({
+        ...tokens,
+        email,
+        client_id: credentials.client_id,
+        saved_at: new Date().toISOString()
+      }, null, 2));
+      
+      console.log(`✅ Backup saved to: ${tokensPath}`);
+      
+      // Test the setup
+      console.log("\n🧪 Testing Gmail API access...");
       try {
-        const emails = await client.getEmailsFromSender("noreply@tinkoff.ru", 1);
-        console.log(`✓ Test passed! Found ${emails.length} email(s) from Tinkoff.`);
-      } catch (testError) {
-        console.warn("⚠️  Could not fetch test emails, but setup completed.");
+        const messages = await gmail.users.messages.list({
+          userId: "me",
+          maxResults: 1,
+          q: "from:noreply@tinkoff.ru"
+        });
+        
+        if (messages.data.messages && messages.data.messages.length > 0) {
+          console.log("✅ Gmail API working - found Tinkoff emails");
+        } else {
+          console.log("✅ Gmail API working - no Tinkoff emails yet");
+        }
+      } catch (error) {
+        console.log("⚠️  API test failed, but setup completed");
       }
+      
+      console.log(`\n✓ Gmail account ${email} setup successfully!`);
       
     } catch (error: any) {
       console.error("\n✗ Failed to exchange code for tokens!");
       
-      if (error.message?.includes("invalid_grant")) {
+      // Show detailed error information
+      if (tokenData && tokenData.error) {
+        console.error("\nGoogle API Error:");
+        console.error(`  Error: ${tokenData.error}`);
+        console.error(`  Description: ${tokenData.error_description || "No description"}`);
+      } else if (error.response?.data) {
+        console.error("\nGoogle API Error:");
+        console.error(`  Status: ${error.response.status}`);
+        console.error(`  Error: ${error.response.data.error}`);
+        console.error(`  Description: ${error.response.data.error_description}`);
+      } else if (error.message) {
+        console.error(`\nError: ${error.message}`);
+      }
+      
+      if (error.message?.includes("invalid_grant") || error.response?.data?.error === "invalid_grant") {
         console.log("\n💡 Common causes and solutions:");
         console.log("1. Code already used - Get a FRESH code");
         console.log("2. Code expired - Complete the process quickly (within 1-2 minutes)");
         console.log("3. Wrong code copied - Copy ONLY the code part or the entire URL");
         console.log("4. Previous authorization - Revoke access at https://myaccount.google.com/permissions");
         console.log("\nTry the setup again with a fresh authorization!");
-      } else {
-        console.log(`\nError details: ${error.message}`);
       }
+      
+      // Debug information
+      console.log("\n🔍 Debug info:");
+      console.log(`  Code length: ${code.length}`);
+      console.log(`  Code preview: ${code.substring(0, 30)}...`);
+      console.log(`  Client ID: ${credentials.client_id.substring(0, 20)}...`);
+      console.log(`  Redirect URI: http://localhost`);
     }
     
   } catch (error) {
@@ -872,9 +984,70 @@ async function startApplication() {
   
   console.log(`\nStarting Itrader in ${mode} mode...\n`);
   
-  // Import and run main
-  const { default: main } = await import("./app");
-  await main();
+  // Disconnect CLI database connection first
+  await db.disconnect();
+  
+  // Start the main app in a child process
+  const { spawn } = await import("child_process");
+  const child = spawn("bun", ["run", "src/app.ts"], {
+    stdio: "inherit",
+    env: { ...process.env, ITRADER_MODE: mode }
+  });
+  
+  // Handle process termination
+  let isTerminating = false;
+  
+  const cleanup = (signal?: string) => {
+    if (!isTerminating) {
+      isTerminating = true;
+      console.log("\nStopping application...");
+      
+      // Try graceful shutdown first
+      if (process.platform === "win32") {
+        // On Windows, use taskkill to send CTRL+C
+        const { execSync } = require("child_process");
+        try {
+          execSync(`taskkill /pid ${child.pid} /T /F`, { stdio: "ignore" });
+        } catch (e) {
+          // If taskkill fails, fall back to normal kill
+          child.kill("SIGTERM");
+        }
+      } else {
+        // On Unix-like systems, send SIGINT first
+        child.kill("SIGINT");
+      }
+      
+      // Force kill after timeout
+      setTimeout(() => {
+        if (!child.killed) {
+          console.log("Force stopping...");
+          child.kill("SIGKILL");
+        }
+      }, 5000);
+    }
+  };
+  
+  // Forward signals to child process
+  process.on("SIGINT", () => cleanup("SIGINT"));
+  process.on("SIGTERM", () => cleanup("SIGTERM"));
+  
+  // When child process exits, return to menu
+  child.on("exit", (code, signal) => {
+    // Remove signal handlers
+    process.removeListener("SIGINT", cleanup);
+    process.removeListener("SIGTERM", cleanup);
+    
+    if (code !== 0 && code !== null) {
+      console.log(`\nApplication exited with code ${code}`);
+    } else if (signal) {
+      console.log(`\nApplication terminated by signal ${signal}`);
+    }
+    
+    // Re-run CLI menu after a short delay
+    setTimeout(() => {
+      runCLI();
+    }, 1000);
+  });
 }
 
 // Export is already done on line 18
