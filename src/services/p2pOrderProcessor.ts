@@ -94,6 +94,54 @@ export class P2POrderProcessor extends EventEmitter {
 
     // Initial check
     await this.checkPendingOrders();
+    
+    // Resume chat polling for existing transactions with orders
+    await this.resumeExistingChats();
+  }
+
+  /**
+   * Resume chat polling for existing transactions
+   */
+  private async resumeExistingChats(): Promise<void> {
+    try {
+      // Get all active transactions with orders
+      const activeTransactions = await prisma.transaction.findMany({
+        where: {
+          orderId: { not: null },
+          status: {
+            in: ['chat_started', 'waiting_payment', 'payment_received']
+          }
+        },
+        include: {
+          advertisement: true
+        }
+      });
+
+      console.log(`[OrderProcessor] Found ${activeTransactions.length} active transactions to resume chat polling`);
+
+      for (const transaction of activeTransactions) {
+        if (transaction.orderId) {
+          try {
+            console.log(`[OrderProcessor] Resuming chat polling for order ${transaction.orderId}, transaction ${transaction.id}`);
+            await this.bybitManager.startChatPolling(transaction.id);
+            
+            // Also add to processed orders to avoid re-processing
+            this.processedOrders.add(transaction.orderId);
+            
+            // Start order monitoring
+            this.startOrderMonitoring(
+              transaction.orderId, 
+              transaction.id, 
+              transaction.advertisement.bybitAccountId
+            );
+          } catch (error) {
+            console.error(`[OrderProcessor] Error resuming chat for transaction ${transaction.id}:`, error);
+          }
+        }
+      }
+    } catch (error) {
+      console.error('[OrderProcessor] Error resuming existing chats:', error);
+    }
   }
 
   /**
@@ -129,8 +177,63 @@ export class P2POrderProcessor extends EventEmitter {
           console.error(`[OrderProcessor] Error checking account ${account.accountId}:`, error);
         }
       }
+      
+      // Also check for orders that might have been created but not processed
+      await this.checkExistingOrdersWithoutChat();
     } catch (error) {
       console.error('[OrderProcessor] Error in checkPendingOrders:', error);
+    }
+  }
+  
+  /**
+   * Check for existing orders without chat messages
+   */
+  private async checkExistingOrdersWithoutChat(): Promise<void> {
+    try {
+      const transactionsWithOrders = await prisma.transaction.findMany({
+        where: {
+          orderId: { not: null },
+          status: {
+            in: ['pending', 'chat_started', 'waiting_payment']
+          }
+        },
+        include: {
+          chatMessages: true,
+          advertisement: true
+        }
+      });
+
+      for (const transaction of transactionsWithOrders) {
+        const hasOurMessages = transaction.chatMessages.some(msg => msg.sender === 'us');
+        
+        if (!hasOurMessages && transaction.orderId) {
+          console.log(`[OrderProcessor] Found order ${transaction.orderId} without our messages, initiating chat`);
+          
+          try {
+            // Update status if needed
+            if (transaction.status === 'pending') {
+              await prisma.transaction.update({
+                where: { id: transaction.id },
+                data: { status: 'chat_started' }
+              });
+            }
+            
+            // Start chat automation
+            await this.chatService.startAutomation(transaction.id);
+            
+            // Start chat polling
+            await this.bybitManager.startChatPolling(transaction.id);
+            
+            // Add to processed orders
+            this.processedOrders.add(transaction.orderId);
+            
+          } catch (error) {
+            console.error(`[OrderProcessor] Error initiating chat for order ${transaction.orderId}:`, error);
+          }
+        }
+      }
+    } catch (error) {
+      console.error('[OrderProcessor] Error checking existing orders:', error);
     }
   }
 
@@ -144,26 +247,52 @@ export class P2POrderProcessor extends EventEmitter {
     }
 
     try {
-      // Get pending orders
-      const response = await client.request({
-        method: 'POST',
-        endpoint: '/v5/p2p/order/pending/simplifyList',
-        data: {
-          page: 1,
-          size: 20
-        }
-      });
-
-      if (!response.result?.items) {
-        return;
-      }
-
-      const orders: P2POrder[] = response.result.items;
+      // Try multiple methods to get orders
+      let orders: P2POrder[] = [];
       
-      for (const order of orders) {
+      try {
+        // Method 1: Get all orders
+        const allOrdersResponse = await client.getOrders(undefined, 1, 100);
+        if (allOrdersResponse.list && allOrdersResponse.list.length > 0) {
+          orders.push(...allOrdersResponse.list);
+          console.log(`[OrderProcessor] Method 1: Found ${allOrdersResponse.list.length} orders`);
+        }
+      } catch (error) {
+        console.error(`[OrderProcessor] Method 1 failed:`, error);
+      }
+      
+      try {
+        // Method 2: Get pending orders
+        const pendingResponse = await client.getPendingOrders(1, 100);
+        if (pendingResponse.list && pendingResponse.list.length > 0) {
+          orders.push(...pendingResponse.list);
+          console.log(`[OrderProcessor] Method 2: Found ${pendingResponse.list.length} pending orders`);
+        }
+      } catch (error) {
+        console.error(`[OrderProcessor] Method 2 failed:`, error);
+      }
+      
+      // Remove duplicates
+      const uniqueOrdersMap = new Map(orders.map(order => [order.id, order]));
+      const uniqueOrders = Array.from(uniqueOrdersMap.values());
+      
+      // Filter only active orders (status 10 or 20)
+      const activeOrders = uniqueOrders.filter(order => 
+        order.status === 10 || order.status === 20
+      );
+      
+      console.log(`[OrderProcessor] Found ${uniqueOrders.length} total unique orders, ${activeOrders.length} active`);
+      
+      for (const order of activeOrders) {
         if (!this.processedOrders.has(order.id)) {
+          console.log(`[OrderProcessor] Processing order ${order.id} with status ${order.status}`);
           await this.processNewOrder(order, accountId);
         }
+      }
+      
+      // Also sync chat messages for existing orders
+      for (const order of activeOrders) {
+        await this.syncChatMessages(order.id, accountId);
       }
     } catch (error) {
       console.error(`[OrderProcessor] Error fetching orders for ${accountId}:`, error);
@@ -190,7 +319,7 @@ export class P2POrderProcessor extends EventEmitter {
       const transaction = await prisma.transaction.findFirst({
         where: {
           advertisement: {
-            bybitId: advertisementId
+            bybitAdId: advertisementId
           }
         },
         include: {
@@ -227,6 +356,10 @@ export class P2POrderProcessor extends EventEmitter {
       // Start chat automation
       await this.chatService.startAutomation(transaction.id);
 
+      // Start chat polling for this order
+      console.log(`[OrderProcessor] Starting chat polling for order ${order.id}, transaction ${transaction.id}`);
+      await this.bybitManager.startChatPolling(transaction.id);
+      
       // Start monitoring order status
       this.startOrderMonitoring(order.id, transaction.id, bybitAccountId);
 
@@ -281,7 +414,7 @@ export class P2POrderProcessor extends EventEmitter {
         where: { id: advertisementId }
       });
 
-      if (!advertisement || !advertisement.bybitId) {
+      if (!advertisement || !advertisement.bybitAdId) {
         console.error(`[OrderProcessor] Advertisement ${advertisementId} not found`);
         return;
       }
@@ -290,7 +423,7 @@ export class P2POrderProcessor extends EventEmitter {
       await client.request({
         method: 'POST',
         endpoint: '/v5/p2p/item/cancel',
-        data: { itemId: advertisement.bybitId }
+        data: { itemId: advertisement.bybitAdId }
       });
 
       // Update status in DB
@@ -372,14 +505,21 @@ export class P2POrderProcessor extends EventEmitter {
   private mapOrderStatus(bybitStatus: number): string {
     switch (bybitStatus) {
       case 5: // waiting for chain
-      case 10: // waiting for buy pay
+        return 'pending';
+      case 10: // waiting for buy pay (Платеж в обработке)
         return 'waiting_payment';
-      case 20: // waiting for seller release
+      case 20: // waiting for seller release (Платеж получен)
         return 'payment_received';
       case 30: // Appealing
       case 100: // objectioning
       case 110: // Waiting for objection
         return 'failed';
+      case 40: // completed
+        return 'completed';
+      case 50: // cancelled by user
+      case 60: // cancelled by system
+      case 70: // cancelled by admin
+        return 'cancelled';
       default:
         return 'pending';
     }
@@ -412,6 +552,75 @@ export class P2POrderProcessor extends EventEmitter {
       where: { id: transactionId },
       data: updateData
     });
+  }
+
+  /**
+   * Sync chat messages from Bybit to database
+   */
+  private async syncChatMessages(orderId: string, accountId: string): Promise<void> {
+    try {
+      const client = this.bybitManager.getClient(accountId);
+      if (!client) return;
+
+      // Get transaction
+      const transaction = await prisma.transaction.findFirst({
+        where: { orderId },
+        include: { advertisement: true }
+      });
+
+      if (!transaction) return;
+
+      // Get chat messages from Bybit
+      const chatResponse = await client.getChatMessages(orderId, 1, 50);
+      if (!chatResponse.list || chatResponse.list.length === 0) return;
+
+      // Get order details to know who is who
+      const orderDetails = await this.getOrderDetails(orderId, accountId);
+      if (!orderDetails) return;
+
+      // Sync messages
+      for (const msg of chatResponse.list) {
+        if (!msg.message) continue;
+
+        // Check if message already exists
+        const existingMsg = await prisma.chatMessage.findFirst({
+          where: {
+            transactionId: transaction.id,
+            messageId: msg.id || msg.msgUuid || `${msg.createDate}_${msg.userId}`
+          }
+        });
+
+        if (!existingMsg) {
+          // Determine sender
+          const sender = msg.userId === orderDetails.userId ? 'us' : 'counterparty';
+          
+          // Save message
+          await prisma.chatMessage.create({
+            data: {
+              transactionId: transaction.id,
+              messageId: msg.id || msg.msgUuid || `${msg.createDate}_${msg.userId}`,
+              sender: sender,
+              content: msg.message,
+              messageType: msg.contentType === 'str' ? 'TEXT' : msg.contentType?.toUpperCase() || 'TEXT',
+              isProcessed: sender === 'us'
+            }
+          });
+
+          console.log(`[OrderProcessor] Synced message: [${sender}] ${msg.message.substring(0, 50)}...`);
+          
+          // If it's from counterparty, emit event
+          if (sender === 'counterparty') {
+            this.emit('chatMessage', {
+              transactionId,
+              message: msg,
+              sender
+            });
+          }
+        }
+      }
+    } catch (error) {
+      console.error(`[OrderProcessor] Error syncing chat messages for order ${orderId}:`, error);
+    }
   }
 
   /**

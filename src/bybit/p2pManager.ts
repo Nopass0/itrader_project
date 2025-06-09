@@ -118,7 +118,7 @@ export class P2PManager extends EventEmitter {
   /**
    * Get client for specific account
    */
-  private getClient(accountId?: string): P2PClient {
+  getClient(accountId?: string): P2PClient {
     const id = accountId || this.activeAccountId;
     if (!id) {
       throw new Error('No active account');

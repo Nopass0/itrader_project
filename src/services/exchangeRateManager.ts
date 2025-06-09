@@ -19,7 +19,7 @@ class ExchangeRateManager {
   private constructor() {
     this.config = {
       mode: "constant",
-      constantRate: 78.2, // Default RUB/USDT rate (within Bybit's allowed range)
+      constantRate: 78, // Default RUB/USDT rate (within Bybit's allowed range)
       lastUpdate: new Date(),
     };
   }
@@ -157,7 +157,7 @@ class ExchangeRateManager {
   public reset(): void {
     this.config = {
       mode: "constant",
-      constantRate: 78.2,
+      constantRate: 78,
       lastUpdate: new Date(),
     };
     console.log("Exchange rate manager reset to defaults");

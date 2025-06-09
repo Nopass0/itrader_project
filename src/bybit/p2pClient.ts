@@ -194,10 +194,27 @@ export class P2PClient extends EventEmitter {
    * Get all orders
    */
   async getOrders(filter?: OrderFilter, page: number = 1, pageSize: number = 20): Promise<PaginatedResponse<P2POrder>> {
-    const response = await this.httpClient.post<PaginatedResponse<P2POrder>>(
+    const response = await this.httpClient.post<any>(
       '/v5/p2p/order/simplifyList',
       { ...filter, page, pageSize }
     );
+    
+    if (this.config.debugMode) {
+      console.log('[P2PClient] getOrders response:', JSON.stringify(response.result, null, 2));
+    }
+    
+    // Handle response structure
+    if (response.result && response.result.items !== undefined) {
+      return {
+        list: response.result.items || [],
+        total: response.result.count || 0,
+        page: page,
+        pageSize: pageSize,
+        totalCount: response.result.count || 0,
+        totalPage: Math.ceil((response.result.count || 0) / pageSize)
+      };
+    }
+    
     return response.result;
   }
 
@@ -205,10 +222,27 @@ export class P2PClient extends EventEmitter {
    * Get pending orders
    */
   async getPendingOrders(page: number = 1, pageSize: number = 20): Promise<PaginatedResponse<P2POrder>> {
-    const response = await this.httpClient.post<PaginatedResponse<P2POrder>>(
+    const response = await this.httpClient.post<any>(
       '/v5/p2p/order/pending/simplifyList',
       { page, pageSize }
     );
+    
+    if (this.config.debugMode) {
+      console.log('[P2PClient] getPendingOrders response:', JSON.stringify(response.result, null, 2));
+    }
+    
+    // Handle response structure
+    if (response.result && response.result.items) {
+      return {
+        list: response.result.items,
+        total: response.result.count || 0,
+        page: page,
+        pageSize: pageSize,
+        totalCount: response.result.count || 0,
+        totalPage: Math.ceil((response.result.count || 0) / pageSize)
+      };
+    }
+    
     return response.result;
   }
 
@@ -263,15 +297,27 @@ export class P2PClient extends EventEmitter {
   /**
    * Send chat message
    */
-  async sendChatMessage(params: SendMessageParams): Promise<ChatMessage> {
-    const response = await this.httpClient.post<ChatMessage>(
+  async sendChatMessage(params: SendMessageParams): Promise<any> {
+    // Generate msgUuid if not provided
+    const msgUuid = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    
+    // Map our params to Bybit's expected format
+    const bybitParams = {
+      orderId: params.orderId,
+      message: params.message,
+      contentType: params.messageType === 'TEXT' ? 'str' : params.messageType?.toLowerCase() || 'str',
+      msgUuid: msgUuid,
+      fileName: params.fileName
+    };
+    
+    const response = await this.httpClient.post<any>(
       '/v5/p2p/order/message/send',
-      params
+      bybitParams
     );
     
-    const message = response.result;
-    this.emitEvent('MESSAGE_RECEIVED', message);
-    return message;
+    // Bybit returns null result for successful message send
+    this.emitEvent('MESSAGE_RECEIVED', response.result);
+    return response.result;
   }
 
   /**
@@ -379,18 +425,25 @@ export class P2PClient extends EventEmitter {
       return;
     }
 
-    let lastMessageId: string | null = null;
+    let processedMessageIds = new Set<string>();
 
     const interval = setInterval(async () => {
       try {
         const messages = await this.getChatMessages(orderId);
-        for (const message of messages.list) {
-          if (!lastMessageId || message.messageId > lastMessageId) {
-            this.emit('chatMessage', message);
-            lastMessageId = message.messageId;
+        if (messages && messages.list && Array.isArray(messages.list)) {
+          for (const message of messages.list) {
+            if (!processedMessageIds.has(message.messageId)) {
+              console.log(`[P2PClient] New chat message detected: ${message.messageId} in order ${orderId}`);
+              this.emit('chatMessage', {
+                ...message,
+                orderId // Ensure orderId is included
+              });
+              processedMessageIds.add(message.messageId);
+            }
           }
         }
       } catch (error) {
+        console.error(`[P2PClient] Error polling chat for order ${orderId}:`, error);
         this.emit('error', error);
       }
     }, intervalMs);

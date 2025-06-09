@@ -6,6 +6,7 @@ import { ChatAutomationService } from "./services/chatAutomation";
 import { CheckVerificationService } from "./services/checkVerification";
 import { P2POrderProcessor } from "./services/p2pOrderProcessor";
 import { ReceiptProcessorService } from "./services/receiptProcessor";
+import { ActiveOrdersMonitorService } from "./services/activeOrdersMonitor";
 import { GmailClient, GmailManager } from "./gmail";
 import inquirer from "inquirer";
 import fs from "fs/promises";
@@ -21,6 +22,7 @@ interface AppContext {
   gmailManager: GmailManager | null;
   orderProcessor: P2POrderProcessor | null;
   receiptProcessor: ReceiptProcessorService | null;
+  activeOrdersMonitor: ActiveOrdersMonitorService | null;
   isManualMode: boolean;
 }
 
@@ -87,6 +89,7 @@ async function main() {
     let gmailManager: any = null;
     let orderProcessor: any = null;
     let receiptProcessor: any = null;
+    let activeOrdersMonitor: any = null;
     
     const checkService = new CheckVerificationService(
       null as any, // Will be set after Gmail initialization
@@ -107,6 +110,7 @@ async function main() {
         gmailManager,
         orderProcessor,
         receiptProcessor,
+        activeOrdersMonitor,
         isManualMode: false,
       } as AppContext,
     });
@@ -194,7 +198,9 @@ async function main() {
           context.gmailClient = client;
 
           // Create Gmail manager
-          context.gmailManager = new GmailManager();
+          context.gmailManager = new GmailManager({
+            tokensDir: "./data/gmail-tokens"
+          });
           await context.gmailManager.initialize();
           
           // Update check service with Gmail client
@@ -211,16 +217,29 @@ async function main() {
             }
           );
 
+          // Initialize active orders monitor
+          context.activeOrdersMonitor = new ActiveOrdersMonitorService(context.bybitManager);
+
           // Initialize receipt processor
-          context.receiptProcessor = new ReceiptProcessorService(
-            context.gmailManager,
-            context.gateAccountManager.getClient(gateAccounts[0]?.email) as any,
-            context.bybitManager,
-            {
-              checkInterval: 30000, // 30 seconds
-              pdfStoragePath: 'data/receipts'
-            }
-          );
+          // Get first active gate account client
+          let gateClient = null;
+          if (gateAccounts.length > 0) {
+            gateClient = context.gateAccountManager.getClient(gateAccounts[0].accountId);
+          }
+          
+          if (gateClient) {
+            context.receiptProcessor = new ReceiptProcessorService(
+              context.gmailManager,
+              gateClient,
+              context.bybitManager,
+              {
+                checkInterval: 30000, // 30 seconds
+                pdfStoragePath: 'data/receipts'
+              }
+            );
+          } else {
+            console.log("[Init] No Gate client available for receipt processor");
+          }
 
           console.log(`[Init] Added Gmail account ${gmailAccount.email}`);
         } catch (error) {
@@ -523,23 +542,23 @@ async function main() {
       interval: 10 * 1000, // 10 seconds
     });
 
-    // Task 3: Monitor P2P Orders
+    // Task 3: Monitor Active P2P Orders
     orchestrator.addTask({
-      id: "order_processor",
-      name: "Monitor and process P2P orders",
+      id: "active_orders_monitor",
+      name: "Monitor active P2P orders and handle chats",
       fn: async (taskContext: any) => {
         const context = getContext(taskContext);
-        if (!context.orderProcessor) {
+        if (!context.activeOrdersMonitor) {
           return;
         }
         
         try {
-          // Order processor runs its own polling loop
-          if (!context.orderProcessor.isRunning) {
-            await context.orderProcessor.start();
+          // Active orders monitor runs its own polling loop
+          if (!context.activeOrdersMonitor.isMonitoring) {
+            await context.activeOrdersMonitor.startMonitoring(30000); // Check every 30 seconds
           }
         } catch (error) {
-          console.error("[OrderProcessor] Error:", error);
+          console.error("[ActiveOrdersMonitor] Error:", error);
         }
       },
       runOnStart: true,
@@ -567,6 +586,22 @@ async function main() {
       },
       runOnStart: true,
       interval: 60 * 60 * 1000, // Check every hour if still running
+    });
+
+    // Task 3.6: Process chat messages
+    orchestrator.addTask({
+      id: "chat_processor",
+      name: "Process chat messages",
+      fn: async (taskContext: any) => {
+        const context = getContext(taskContext);
+        
+        try {
+          await context.chatService.processUnprocessedMessages();
+        } catch (error) {
+          console.error("[ChatProcessor] Error:", error);
+        }
+      },
+      interval: 5 * 1000, // Process every 5 seconds
     });
 
     // Task 4: Legacy Gmail check (for backward compatibility)
@@ -678,6 +713,11 @@ async function main() {
         // Stop receipt processor  
         if (orchestrator.context.receiptProcessor) {
           orchestrator.context.receiptProcessor.stop();
+        }
+        
+        // Stop active orders monitor
+        if (orchestrator.context.activeOrdersMonitor) {
+          await orchestrator.context.activeOrdersMonitor.cleanup();
         }
         
         await db.disconnect();

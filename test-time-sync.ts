@@ -1,42 +1,50 @@
-#!/usr/bin/env bun
+import { TimeSync } from './src/bybit/utils/timeSync';
 
-import { TimeSync } from "./src/bybit/utils/timeSync";
+async function main() {
+  console.log('🕐 Testing time synchronization with Bybit...\n');
 
-async function testTimeSync() {
-  console.log("Testing Bybit Time Synchronization...\n");
-  
-  // Show current system time
-  const localTime = new Date();
-  console.log(`Local system time: ${localTime.toISOString()}`);
-  console.log(`Local timestamp: ${Date.now()}`);
-  
   try {
-    // Sync with Bybit server
-    console.log("\nSynchronizing with Bybit server...");
-    await TimeSync.forceSync();
+    // Get current local time
+    const localTime = new Date();
+    console.log(`Local time: ${localTime.toISOString()}`);
+    console.log(`Local timestamp: ${Date.now()}`);
+
+    // Force time sync
+    console.log('\n🔄 Forcing time synchronization...');
+    await TimeSync.forceSync(false);
+
+    // Check sync status
+    console.log('\nSync status:', {
+      isSynchronized: TimeSync.isSynchronized(),
+      offset: TimeSync.getOffset(),
+      lastSync: TimeSync.getLastSyncTime()
+    });
+
+    // Test synchronized time
+    const syncedTime = TimeSync.getSynchronizedTimestamp();
+    console.log(`\nSynchronized timestamp: ${syncedTime}`);
+    console.log(`Difference from local: ${syncedTime - Date.now()}ms`);
+
+    // Get server time directly
+    console.log('\n📡 Getting server time from Bybit...');
+    const response = await fetch('https://api.bybit.com/v5/market/time');
+    const data = await response.json();
     
-    // Show synchronized time
-    const syncedTimestamp = TimeSync.getTimestamp();
-    const syncedTime = new Date(parseInt(syncedTimestamp));
-    console.log(`\nSynchronized timestamp: ${syncedTimestamp}`);
-    console.log(`Synchronized time: ${syncedTime.toISOString()}`);
-    
-    // Show offset
-    const offset = TimeSync.getOffset();
-    console.log(`\nTime offset: ${offset}ms`);
-    console.log(`Time offset: ${(offset / 1000 / 60).toFixed(2)} minutes`);
-    console.log(`Time offset: ${(offset / 1000 / 60 / 60).toFixed(2)} hours`);
-    
-    if (Math.abs(offset) > 60000) {
-      console.log("\n⚠️  WARNING: Large time offset detected!");
-      console.log("Your system time appears to be significantly different from the server time.");
-    } else {
-      console.log("\n✅ Time synchronization successful!");
+    if (data.result) {
+      const serverTime = parseInt(data.result.timeSecond) * 1000;
+      console.log(`Server timestamp: ${serverTime}`);
+      console.log(`Server time: ${new Date(serverTime).toISOString()}`);
+      console.log(`Local vs Server difference: ${Date.now() - serverTime}ms`);
     }
-    
+
+    console.log('\n✅ Time sync test complete!');
+    console.log('\nIf the difference is more than 5000ms, you may need to:');
+    console.log('1. Sync your system clock with an NTP server');
+    console.log('2. Check your timezone settings');
+
   } catch (error) {
-    console.error("\n❌ Time synchronization failed:", error);
+    console.error('❌ Error:', error);
   }
 }
 
-testTimeSync();
+main().catch(console.error);

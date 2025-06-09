@@ -96,4 +96,35 @@ export class TimeSync {
   static isSynchronized(): boolean {
     return this.lastSync > 0 && (Date.now() - this.lastSync) < this.syncInterval;
   }
+
+  /**
+   * Get synchronized timestamp (number)
+   */
+  static getSynchronizedTimestamp(): number {
+    if (!this.isSynchronized()) {
+      console.warn('[TimeSync] Not synchronized, using local time');
+      return Date.now();
+    }
+    
+    // Apply offset to current time
+    const localTime = Date.now();
+    const synchronizedTime = localTime + this.serverTimeOffset;
+    
+    return synchronizedTime;
+  }
+
+  /**
+   * Get last sync time
+   */
+  static getLastSyncTime(): number {
+    return this.lastSync;
+  }
+
+  /**
+   * Clear synchronization
+   */
+  static clear(): void {
+    this.serverTimeOffset = 0;
+    this.lastSync = 0;
+  }
 }

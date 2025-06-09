@@ -363,6 +363,26 @@ class DatabaseClient {
     }, "Get unprocessed chat messages");
   }
 
+  async saveChatMessage(data: {
+    transactionId: string;
+    messageId: string;
+    sender: string;
+    content: string;
+    messageType: string;
+    isProcessed?: boolean;
+  }): Promise<ChatMessage> {
+    return await this.createChatMessage(data);
+  }
+
+  async getChatMessages(transactionId: string): Promise<ChatMessage[]> {
+    return await this.executeWithRetry(async () => {
+      return await this.prisma.chatMessage.findMany({
+        where: { transactionId },
+        orderBy: { createdAt: "asc" },
+      });
+    }, "Get chat messages");
+  }
+
   // ========== Account Methods ==========
 
   async upsertGateAccount(data: {
