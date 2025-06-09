@@ -93,14 +93,41 @@ export class ChatAutomationService {
         } else {
           // All questions answered correctly, send payment details
           await this.sendPaymentDetails(transaction.id);
+          await db.updateTransaction(transaction.id, { 
+            status: 'waiting_payment',
+            paymentSentAt: new Date()
+          });
         }
       } else {
-        // Invalid answer
-        if (step.failureAction === 'blacklist') {
-          await this.blacklistTransaction(transaction.id, `Failed at step ${currentStep}: ${message.content}`);
+        // Invalid answer - count wrong attempts
+        const wrongAttempts = await this.getWrongAnswerCount(transaction.id, currentStep);
+        
+        if (wrongAttempts >= 2) {
+          // Too many wrong answers (3 total), mark as stupid
+          await db.updateTransaction(transaction.id, { 
+            status: 'stupid',
+            failureReason: `Too many wrong answers at step ${currentStep}: ${message.content}`
+          });
+          
+          await this.bybitManager.sendChatMessage(
+            transaction.id, 
+            "К сожалению, мы не можем продолжить сделку из-за некорректных ответов. Транзакция отменена."
+          );
         } else {
-          // Repeat the question
-          await this.sendStepMessage(transaction.id, currentStep);
+          // Send warning and repeat the question
+          const stepData = this.chatSteps[currentStep - 1];
+          const warningMessage = `⚠️ Пожалуйста, отвечайте строго как указано в инструкции! Это поможет быстрее провести транзакцию.\n\n${stepData.question}`;
+          await this.bybitManager.sendChatMessage(transaction.id, warningMessage);
+          
+          // Save wrong answer attempt
+          await db.saveChatMessage({
+            transactionId: transaction.id,
+            messageId: `system_wrong_${Date.now()}`,
+            sender: 'system',
+            content: `wrong_answer_step_${currentStep}_attempt_${wrongAttempts + 1}`,
+            messageType: 'SYSTEM',
+            isProcessed: true
+          });
         }
       }
     }
@@ -177,6 +204,17 @@ Email для чека: ${gmailAccount.email}
     return expectedAnswers.some(expected => 
       normalizedAnswer.includes(expected.toLowerCase())
     );
+  }
+
+  /**
+   * Get count of wrong answers for current step
+   */
+  private async getWrongAnswerCount(transactionId: string, step: number): Promise<number> {
+    const messages = await db.getChatMessages(transactionId);
+    return messages.filter(msg => 
+      msg.sender === 'system' && 
+      msg.content.startsWith(`wrong_answer_step_${step}_`)
+    ).length;
   }
 
   /**

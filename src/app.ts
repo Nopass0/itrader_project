@@ -4,7 +4,9 @@ import { GateAccountManager } from "./gate";
 import { BybitP2PManagerService } from "./services/bybitP2PManager";
 import { ChatAutomationService } from "./services/chatAutomation";
 import { CheckVerificationService } from "./services/checkVerification";
-import { GmailClient } from "./gmail";
+import { P2POrderProcessor } from "./services/p2pOrderProcessor";
+import { ReceiptProcessorService } from "./services/receiptProcessor";
+import { GmailClient, GmailManager } from "./gmail";
 import inquirer from "inquirer";
 import fs from "fs/promises";
 import path from "path";
@@ -16,6 +18,9 @@ interface AppContext {
   chatService: ChatAutomationService;
   checkService: CheckVerificationService;
   gmailClient: GmailClient | null;
+  gmailManager: GmailManager | null;
+  orderProcessor: P2POrderProcessor | null;
+  receiptProcessor: ReceiptProcessorService | null;
   isManualMode: boolean;
 }
 
@@ -77,8 +82,12 @@ async function main() {
       console.error("⚠️  Time sync failed, continuing anyway:", error);
     }
 
-    // Gmail client will be initialized later
+    // Gmail will be initialized later
     let gmailClient: any = null;
+    let gmailManager: any = null;
+    let orderProcessor: any = null;
+    let receiptProcessor: any = null;
+    
     const checkService = new CheckVerificationService(
       null as any, // Will be set after Gmail initialization
       chatService,
@@ -95,6 +104,9 @@ async function main() {
         chatService,
         checkService,
         gmailClient,
+        gmailManager,
+        orderProcessor,
+        receiptProcessor,
         isManualMode: false,
       } as AppContext,
     });
@@ -181,8 +193,34 @@ async function main() {
           await client.setTokens({ refresh_token: gmailAccount.refreshToken });
           context.gmailClient = client;
 
+          // Create Gmail manager
+          context.gmailManager = new GmailManager();
+          await context.gmailManager.initialize();
+          
           // Update check service with Gmail client
           (context.checkService as any).gmailClient = client;
+
+          // Initialize order processor
+          context.orderProcessor = new P2POrderProcessor(
+            context.bybitManager,
+            context.chatService,
+            {
+              pollingInterval: 10000, // 10 seconds
+              maxRetries: 3,
+              retryDelay: 5000
+            }
+          );
+
+          // Initialize receipt processor
+          context.receiptProcessor = new ReceiptProcessorService(
+            context.gmailManager,
+            context.gateAccountManager.getClient(gateAccounts[0]?.email) as any,
+            context.bybitManager,
+            {
+              checkInterval: 30000, // 30 seconds
+              pdfStoragePath: 'data/receipts'
+            }
+          );
 
           console.log(`[Init] Added Gmail account ${gmailAccount.email}`);
         } catch (error) {
@@ -485,74 +523,88 @@ async function main() {
       interval: 10 * 1000, // 10 seconds
     });
 
-    // Task 3: Handle chat automation
+    // Task 3: Monitor P2P Orders
     orchestrator.addTask({
-      id: "ad_listener",
-      name: "Process chat messages and automate responses",
+      id: "order_processor",
+      name: "Monitor and process P2P orders",
       fn: async (taskContext: any) => {
         const context = getContext(taskContext);
+        if (!context.orderProcessor) {
+          return;
+        }
+        
         try {
-          // Get active transactions
-          const activeTransactions = await context.db.getActiveTransactions();
-
-          // Start chat polling for transactions with orders
-          for (const transaction of activeTransactions) {
-            if (transaction.orderId && transaction.status === "chat_started") {
-              await context.bybitManager.startChatPolling(transaction.id);
-            }
+          // Order processor runs its own polling loop
+          if (!context.orderProcessor.isRunning) {
+            await context.orderProcessor.start();
           }
-
-          // Process unprocessed messages
-          await context.chatService.processUnprocessedMessages();
         } catch (error) {
-          console.error("[AdListener] Error:", error);
+          console.error("[OrderProcessor] Error:", error);
         }
       },
-      interval: 1000, // 1 second
+      runOnStart: true,
+      interval: 60 * 60 * 1000, // Check every hour if still running
     });
 
-    // Task 4: Check Gmail for payment receipts
+    // Task 3.5: Process receipts
+    orchestrator.addTask({
+      id: "receipt_processor", 
+      name: "Process email receipts",
+      fn: async (taskContext: any) => {
+        const context = getContext(taskContext);
+        if (!context.receiptProcessor) {
+          return;
+        }
+        
+        try {
+          // Receipt processor runs its own polling loop
+          if (!context.receiptProcessor.isRunning) {
+            await context.receiptProcessor.start();
+          }
+        } catch (error) {
+          console.error("[ReceiptProcessor] Error:", error);
+        }
+      },
+      runOnStart: true,
+      interval: 60 * 60 * 1000, // Check every hour if still running
+    });
+
+    // Task 4: Legacy Gmail check (for backward compatibility)
     orchestrator.addTask({
       id: "gmail_listener",
-      name: "Check Gmail for payment receipts",
+      name: "Legacy Gmail check",
       fn: async (taskContext: any) => {
-        const context = getContext(taskContext);
-        try {
-          await context.checkService.processNewChecks();
-        } catch (error) {
-          console.error("[GmailListener] Error:", error);
-        }
+        // This is now handled by receipt_processor
+        // Kept for backward compatibility
       },
-      interval: 10 * 1000, // 10 seconds
+      interval: 60 * 60 * 1000, // 1 hour (effectively disabled)
     });
 
-    // Task 5: Release funds after 2 minutes
+    // Task 5: Handle failed/stuck transactions
     orchestrator.addTask({
       id: "successer",
-      name: "Release funds for completed transactions",
+      name: "Handle failed or stuck transactions",
       fn: async (taskContext: any) => {
         const context = getContext(taskContext);
         try {
-          const transactionsToRelease =
-            await context.db.getSuccessfulTransactionsForRelease();
-
-          for (const transaction of transactionsToRelease) {
-            if (
-              await promptUser(
-                `Release funds for transaction ${transaction.id}?`,
-              )
-            ) {
-              await context.bybitManager.releaseAssets(transaction.id);
-              console.log(
-                `[Successer] Released funds for transaction ${transaction.id}`,
-              );
+          // Check for stuck transactions (no activity for 30 minutes)
+          const stuckTransactions = await context.db.getStuckTransactions();
+          
+          for (const transaction of stuckTransactions) {
+            console.log(`[Successer] Found stuck transaction ${transaction.id}`);
+            
+            if (await promptUser(`Mark transaction ${transaction.id} as failed?`)) {
+              await context.db.updateTransaction(transaction.id, {
+                status: 'failed',
+                failureReason: 'Transaction stuck - no activity for 30 minutes'
+              });
             }
           }
         } catch (error) {
           console.error("[Successer] Error:", error);
         }
       },
-      interval: 10 * 1000, // 10 seconds
+      interval: 5 * 60 * 1000, // 5 minutes
     });
 
     // Task 6: set gate balance 10m every 4 hours and from started
@@ -617,6 +669,17 @@ async function main() {
 
       try {
         await orchestrator.stop();
+        
+        // Stop order processor
+        if (orchestrator.context.orderProcessor) {
+          orchestrator.context.orderProcessor.stop();
+        }
+        
+        // Stop receipt processor  
+        if (orchestrator.context.receiptProcessor) {
+          orchestrator.context.receiptProcessor.stop();
+        }
+        
         await db.disconnect();
         console.log("Shutdown complete");
         process.exit(0);

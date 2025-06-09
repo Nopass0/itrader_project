@@ -544,6 +544,43 @@ export class GateClient {
   }
 
   /**
+   * Approves a payout with a receipt attachment
+   * @param payoutId - ID of the payout to approve
+   * @param receiptData - PDF receipt data
+   * @returns Success status
+   */
+  async approvePayout(payoutId: string, receiptData: Buffer): Promise<boolean> {
+    const url = `${this.baseUrl}/payments/payouts/${payoutId}/approve`;
+    console.log(`[GateClient] Approving payout ${payoutId}`);
+
+    try {
+      const formData = new FormData();
+      formData.append('receipt', new Blob([receiptData], { type: 'application/pdf' }), 'receipt.pdf');
+      
+      const response = await this.client.post(url, formData, {
+        ...this.getRequestConfig(),
+        headers: {
+          ...this.getRequestConfig().headers,
+          'Content-Type': 'multipart/form-data'
+        }
+      });
+      
+      this.checkResponse(response);
+      
+      const data = response.data as GateResponse<any>;
+      if (!data.success) {
+        throw new GateApiError(data.error || "Failed to approve payout");
+      }
+      
+      console.log(`[GateClient] Payout ${payoutId} approved successfully`);
+      return true;
+    } catch (error) {
+      console.error(`[GateClient] Error approving payout ${payoutId}:`, error);
+      throw error;
+    }
+  }
+
+  /**
    * Ищет транзакцию по ID
    * @param transactionId - ID транзакции для поиска
    * @returns Найденная транзакция или undefined
@@ -571,6 +608,34 @@ export class GateClient {
 
     console.log(`[GateClient] Транзакция ${transactionId} не найдена`);
     return undefined;
+  }
+
+  /**
+   * Search payouts with filters
+   * @param filters - Search filters
+   * @returns Array of payouts
+   */
+  async searchPayouts(filters: { id?: string; status?: number }): Promise<Payout[]> {
+    let url = `${this.baseUrl}/payments/payouts?page=1`;
+    
+    if (filters.id) {
+      url += `&search[term]=${filters.id}`;
+    }
+    if (filters.status !== undefined) {
+      url += `&filters[status][]=${filters.status}`;
+    }
+    
+    console.log(`[GateClient] Searching payouts: ${url}`);
+    
+    const response = await this.client.get(url, this.getRequestConfig());
+    this.checkResponse(response);
+    
+    const data = response.data as GateResponse<PayoutsResponse>;
+    if (!data.success || !data.response) {
+      throw new GateApiError(data.error || "Failed to search payouts");
+    }
+    
+    return data.response.payouts.data;
   }
 
   /**

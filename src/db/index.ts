@@ -517,6 +517,38 @@ class DatabaseClient {
     return mode === "manual";
   }
 
+  async getStuckTransactions(minutesThreshold: number = 30) {
+    return await this.executeWithRetry(async () => {
+      const threshold = new Date(Date.now() - minutesThreshold * 60 * 1000);
+      return await this.prisma.transaction.findMany({
+        where: {
+          status: {
+            in: ['pending', 'chat_started', 'waiting_payment']
+          },
+          updatedAt: {
+            lt: threshold
+          }
+        },
+        include: {
+          payout: true,
+          advertisement: true
+        }
+      });
+    }, "Get stuck transactions");
+  }
+
+  async updateTransaction(id: string, data: any) {
+    return await this.executeWithRetry(async () => {
+      return await this.prisma.transaction.update({
+        where: { id },
+        data: {
+          ...data,
+          updatedAt: new Date()
+        }
+      });
+    }, "Update transaction");
+  }
+
   get client() {
     return this.prisma;
   }

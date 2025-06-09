@@ -108,7 +108,7 @@ model GateAccount {
   id        String    @id @default(cuid())
   accountId String    @unique
   email     String
-  password  String //raw password
+  password  String?   @default("") //raw password
   apiKey    String
   apiSecret String
   isActive  Boolean   @default(true)
@@ -156,4 +156,12 @@ model SystemSettings {
   value     String
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+model ProcessedEmail {
+  id          String   @id @default(cuid())
+  emailId     String   @unique
+  processedAt DateTime @default(now())
+  
+  @@index([processedAt])
 }
