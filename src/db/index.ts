@@ -1,5 +1,5 @@
-import { 
-  PrismaClient, 
+import {
+  PrismaClient,
   type Payout,
   type BybitAdvertisement,
   type Transaction,
@@ -10,6 +10,7 @@ import {
   type BlacklistedTransaction,
   type SystemSettings
 } from "../../generated/prisma";
+import axios from "axios";
 
 interface GatePayoutData {
   id: number;
@@ -238,6 +239,8 @@ class DatabaseClient {
     payoutId: string;
     advertisementId: string;
     status: string;
+    successUri?: string | null;
+    failUri?: string | null;
   }): Promise<Transaction> {
     return await this.executeWithRetry(async () => {
       return await this.prisma.transaction.create({
@@ -539,13 +542,29 @@ class DatabaseClient {
 
   async updateTransaction(id: string, data: any) {
     return await this.executeWithRetry(async () => {
-      return await this.prisma.transaction.update({
+      const existing = await this.prisma.transaction.findUnique({ where: { id } });
+
+      const updated = await this.prisma.transaction.update({
         where: { id },
         data: {
           ...data,
           updatedAt: new Date()
         }
       });
+
+      if (data.status && existing?.status !== data.status) {
+        if (data.status === 'completed' && updated.successUri) {
+          try {
+            await axios.post(updated.successUri).catch(() => {});
+          } catch {}
+        } else if (data.status === 'failed' && updated.failUri) {
+          try {
+            await axios.post(updated.failUri).catch(() => {});
+          } catch {}
+        }
+      }
+
+      return updated;
     }, "Update transaction");
   }
 

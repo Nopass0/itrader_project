@@ -497,10 +497,14 @@ async function main() {
                 // Don't create a transaction yet, will retry on next iteration
               } else {
                 // Create transaction
+                const meta: any = payout.meta && typeof payout.meta === 'string' ? JSON.parse(payout.meta) : payout.meta;
+
                 await context.db.createTransaction({
                   payoutId: payout.id,
                   advertisementId,
                   status: "pending",
+                  successUri: meta?.successUri || null,
+                  failUri: meta?.failUri || null,
                 });
 
                 console.log(

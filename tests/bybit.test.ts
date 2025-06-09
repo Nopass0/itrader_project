@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'bun:test';
 import { P2PClient } from '../src/bybit/p2pClient';
-import { TimeSyncManager } from '../src/bybit/utils/timeSync';
+import { TimeSync } from '../src/bybit/utils/timeSync';
 
 // prevent network calls during tests
-TimeSyncManager.syncServerTime = async () => {};
+TimeSync.forceSync = async () => {};
 
 class MockHttpClient {
   logs: any[] = [];

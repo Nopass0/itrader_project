@@ -76,6 +76,8 @@ model Transaction {
   checkReceivedAt DateTime? // When we received the check
   completedAt     DateTime? // When transaction was completed
   failureReason   String?
+  successUri      String?
+  failUri         String?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
