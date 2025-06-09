@@ -197,15 +197,25 @@ export class GmailClient {
   /**
    * Получает письма от определенного отправителя
    * @param from - Email отправителя
-   * @param filter - Дополнительные фильтры
-   * @returns Результаты поиска
+   * @param filterOrLimit - Фильтры или количество писем
+   * @returns Результаты поиска или массив писем
    */
   async getEmailsFromSender(
     from: string,
-    filter: EmailFilter = {},
-  ): Promise<EmailSearchResult> {
+    filterOrLimit: EmailFilter | number = {},
+  ): Promise<EmailSearchResult | GmailMessage[]> {
+    // Backward compatibility: if number is passed, return array
+    if (typeof filterOrLimit === 'number') {
+      const result = await this.getEmails({
+        from,
+        maxResults: filterOrLimit,
+      });
+      return result.messages || [];
+    }
+    
+    // Normal case: return EmailSearchResult
     return this.getEmails({
-      ...filter,
+      ...filterOrLimit,
       from,
     });
   }
@@ -235,14 +245,24 @@ export class GmailClient {
   /**
    * Скачивает вложение из письма
    * @param messageId - ID письма
-   * @param attachmentId - ID вложения
+   * @param attachmentIdOrInfo - ID вложения или информация о вложении
    * @returns Данные вложения
    */
   async downloadAttachment(
     messageId: string,
-    attachmentId: string,
+    attachmentIdOrInfo: string | EmailAttachment,
   ): Promise<EmailAttachment> {
     await this.refreshTokensIfNeeded();
+
+    let attachmentId: string;
+    let attachmentInfo: Partial<EmailAttachment> = {};
+    
+    if (typeof attachmentIdOrInfo === 'string') {
+      attachmentId = attachmentIdOrInfo;
+    } else {
+      attachmentId = attachmentIdOrInfo.id;
+      attachmentInfo = attachmentIdOrInfo;
+    }
 
     try {
       const response = await this.gmail.users.messages.attachments.get({
@@ -255,16 +275,12 @@ export class GmailClient {
         throw new GmailApiError("Вложение не содержит данных");
       }
 
-      // Получаем информацию о вложении из письма
-      const message = await this.getMessage(messageId);
-      const attachment = message.attachments?.find((a) => a.id === attachmentId);
-
-      if (!attachment) {
-        throw new GmailApiError("Информация о вложении не найдена");
-      }
-
+      // Return attachment data with provided info or defaults
       return {
-        ...attachment,
+        id: attachmentId,
+        filename: attachmentInfo.filename || "attachment",
+        mimeType: attachmentInfo.mimeType || "application/octet-stream",
+        size: attachmentInfo.size || response.data.size || 0,
         data: response.data.data,
       };
     } catch (error: unknown) {

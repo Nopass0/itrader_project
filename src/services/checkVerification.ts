@@ -5,7 +5,7 @@
 
 import { db, type Transaction } from '../db';
 import { GmailClient } from '../gmail';
-import { OcrProcessor } from '../ocr';
+import { ReceiptProcessor } from '../ocr/processor';
 import { GateClient } from '../gate/client';
 import { RateLimiter } from '../gate/utils/rateLimiter';
 import { ChatAutomationService } from './chatAutomation';
@@ -23,7 +23,7 @@ interface CheckData {
 
 export class CheckVerificationService {
   public gmailClient: GmailClient | null;
-  private ocrProcessor: OcrProcessor;
+  private ocrProcessor: ReceiptProcessor;
   private chatService: ChatAutomationService;
   private rateLimiter: RateLimiter;
   
@@ -32,7 +32,7 @@ export class CheckVerificationService {
     chatService: ChatAutomationService
   ) {
     this.gmailClient = gmailClient;
-    this.ocrProcessor = new OcrProcessor();
+    this.ocrProcessor = new ReceiptProcessor();
     this.chatService = chatService;
     this.rateLimiter = new RateLimiter();
   }
@@ -70,11 +70,17 @@ export class CheckVerificationService {
 
     console.log(`[CheckVerification] Checking for new checks, ${waitingTransactions.length} transactions waiting`);
 
-    // Get emails from Tinkoff
-    const emails = await this.gmailClient.getEmailsFromSender(
+    // Get emails from Tinkoff from the last 30 minutes
+    const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000);
+    const searchResult = await this.gmailClient.getEmailsFromSender(
       'noreply@tinkoff.ru',
-      10 // Get last 10 emails
+      {
+        after: thirtyMinutesAgo,
+        maxResults: 20
+      }
     );
+    
+    const emails = searchResult.emails;
 
     for (const email of emails) {
       // Skip if no attachments
@@ -110,10 +116,22 @@ export class CheckVerificationService {
     waitingTransactions: any[]
   ): Promise<void> {
     // Download attachment
-    const attachmentData = await this.gmailClient.getAttachment(
+    if (!this.gmailClient) {
+      console.error('[CheckVerification] Gmail client not available');
+      return;
+    }
+    
+    const fullAttachment = await this.gmailClient.downloadAttachment(
       emailId,
-      attachment.attachmentId
+      attachment.id
     );
+    
+    if (!fullAttachment.data) {
+      console.error('[CheckVerification] No attachment data received');
+      return;
+    }
+    
+    const attachmentData = fullAttachment.data;
 
     if (!attachmentData) {
       console.error('[CheckVerification] Failed to download attachment');
@@ -165,7 +183,12 @@ export class CheckVerificationService {
    */
   private async extractCheckData(pdfPath: string): Promise<CheckData | null> {
     try {
-      const result = await this.ocrProcessor.processReceipt(pdfPath);
+      // Read PDF file
+      const pdfData = await fs.readFile(pdfPath);
+      // Use a dummy expected amount for now (will be matched later)
+      const { Decimal } = await import('decimal.js');
+      const dummyAmount = new Decimal(0);
+      const result = await this.ocrProcessor.processReceipt(pdfData, dummyAmount);
       
       // The processReceipt returns ReceiptData directly
       return {

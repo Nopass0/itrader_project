@@ -7,6 +7,7 @@
  * - Парсинг данных чека (сумма, банк, телефон, карта и т.д.)
  * - Валидацию чеков
  * - Сравнение с транзакциями
+ * - Типизированный парсинг чеков Тинькофф
  *
  * @example
  * ```typescript
@@ -29,12 +30,26 @@
  *   amount
  * );
  * ```
+ *
+ * @example Типизированный парсер Тинькофф
+ * ```typescript
+ * import { TinkoffReceiptParser, TransferType } from './ocr';
+ *
+ * const parser = new TinkoffReceiptParser();
+ * const receipt = await parser.parseReceiptFromFile('receipt.pdf');
+ *
+ * // TypeScript автоматически определит тип
+ * if (receipt.transferType === TransferType.BY_PHONE) {
+ *   console.log('Телефон:', receipt.recipientPhone);
+ *   console.log('Банк:', receipt.recipientBank);
+ * }
+ * ```
  */
 
 import { Decimal } from "decimal.js";
 import * as fs from "fs/promises";
 import { ReceiptProcessor } from "./processor";
-import { PdfReceiptParser } from "./pdfParser";
+import { PDFParser } from "./pdfParser";
 import {
   type ReceiptData,
   type ReceiptInfo,
@@ -154,10 +169,21 @@ export class OcrProcessor {
 }
 
 // Экспортируем основные классы и типы
-export { ReceiptProcessor, PdfReceiptParser };
+export { ReceiptProcessor, PDFParser };
 export * from "./types/models";
 export * from "./utils/validators";
 export {
   extractTextFromPdf,
   extractTextFromPdfBuffer,
 } from "./utils/textExtractor";
+
+// Экспортируем новый типизированный парсер
+export { 
+  TinkoffReceiptParser, 
+  type ParsedReceipt,
+  type PhoneTransferReceipt,
+  type TBankTransferReceipt,
+  type CardTransferReceipt,
+  TransferType,
+  ReceiptParseError
+} from "./receiptParser";

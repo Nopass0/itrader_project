@@ -46,7 +46,8 @@
       "Bash(touch:*)",
       "Bash(npx ts-node:*)",
       "Bash(npx tsx:*)",
-      "Bash(bun test:*)"
+      "Bash(bun test:*)",
+      "Bash(pdftotext:*)"
     ],
     "deny": []
   }
