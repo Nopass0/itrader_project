@@ -460,9 +460,10 @@ async function showGmailAccount() {
 
 async function setupGmailAccount() {
   console.log("\nGmail OAuth Setup");
+  console.log("This will use manual code entry for authorization.");
   console.log("1. You will be redirected to Google to authorize the application");
-  console.log("2. After authorization, you'll receive a code");
-  console.log("3. Enter the code here to complete setup\n");
+  console.log("2. After authorization, you'll see a URL with a code");
+  console.log("3. Copy the code or entire URL and paste it here\n");
 
   const { proceed } = await inquirer.prompt([
     {
@@ -488,8 +489,9 @@ async function setupGmailAccount() {
       console.log("2. Create a new project or select existing");
       console.log("3. Enable Gmail API");
       console.log("4. Create credentials (OAuth 2.0 Client ID)");
-      console.log("5. Download the credentials JSON file");
-      console.log(`6. Save it as: ${credentialsPath}\n`);
+      console.log("5. Select 'Desktop app' as application type");
+      console.log("6. Download the credentials JSON file");
+      console.log(`7. Save it as: ${credentialsPath}\n`);
       
       await inquirer.prompt([{ type: "input", name: "continue", message: "Press Enter to continue..." }]);
       return;
@@ -513,84 +515,104 @@ async function setupGmailAccount() {
       return;
     }
     
-    // Create OAuth2Manager
-    const { OAuth2Manager } = await import("./gmail/utils/oauth2");
-    const { startLocalServer } = await import("./gmail/utils/localServer");
-    const oauth2Manager = new OAuth2Manager(credentials, undefined, false);
+    // Import necessary utilities
+    const { createOAuth2Manager, extractCodeFromUrl } = await import("./gmail/utils/oauth2Fix");
     
-    // Now create GmailClient with OAuth2Manager
-    const client = new GmailClient(oauth2Manager);
-    
-    // Start local server first
-    console.log("\nStarting local server to receive authorization code...");
-    const serverPromise = startLocalServer(80).catch(async () => {
-      console.log("Failed to start on port 80, trying port 3000...");
-      return startLocalServer(3000);
-    }).catch(async () => {
-      console.log("Failed to start on port 3000, trying port 8080...");
-      return startLocalServer(8080);
-    });
-    
-    // Give server time to start
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    
-    // Get auth URL and open browser
+    // Create OAuth2Manager with proper configuration
+    const oauth2Manager = createOAuth2Manager(credentials);
     const authUrl = oauth2Manager.getAuthUrl();
-    console.log("\nOpening browser...");
-    console.log("If browser doesn't open, go to:");
-    console.log(authUrl);
+    
+    console.log("\n🌐 Authorization Required");
+    console.log("========================");
+    console.log("\nOpen this URL in your browser (preferably in incognito mode):");
+    console.log(`\n${authUrl}\n`);
+    
+    console.log("After authorization, you'll be redirected to a URL like:");
+    console.log("http://localhost/?code=4/0AX4XfWh...&scope=...\n");
+    
+    console.log("Copy either:");
+    console.log("- The ENTIRE redirect URL, or");
+    console.log("- Just the code part (between 'code=' and '&scope')\n");
     
     // Try to open browser automatically
     try {
       const open = await import("open");
       await open.default(authUrl);
+      console.log("Browser opened automatically. Complete the authorization there.\n");
     } catch {
       // Ignore if can't open
     }
     
-    // Wait for authorization code from server
+    const { input } = await inquirer.prompt([
+      {
+        type: "input",
+        name: "input",
+        message: "Paste the authorization code or full redirect URL:",
+        validate: (input) => input.trim().length > 0,
+      },
+    ]);
+    
+    // Extract code from input (could be full URL or just the code)
+    let code = input.trim();
+    
+    // Check if input looks like a URL
+    if (input.includes("http") || input.includes("code=")) {
+      const extracted = extractCodeFromUrl(input);
+      if (extracted) {
+        code = extracted;
+        console.log("\n✅ Code extracted from URL");
+      }
+    }
+    
+    console.log("\nExchanging code for tokens...");
+    
     try {
-      const code = await serverPromise;
       const tokens = await oauth2Manager.getTokenFromCode(code);
+      
+      if (!tokens.refresh_token) {
+        console.warn("\n⚠️  Warning: No refresh token received.");
+        console.log("This might happen if you've authorized this app before.");
+        console.log("You may need to revoke access and try again:");
+        console.log("https://myaccount.google.com/permissions\n");
+      }
+      
+      // Create client and get profile
+      const client = new GmailClient(oauth2Manager);
       await client.setTokens(tokens);
       const profile = await client.getUserProfile();
       
+      // Save to database
       await db.upsertGmailAccount({
         email: profile.emailAddress || "unknown",
         refreshToken: tokens.refresh_token || "",
       });
       
-      console.log("✓ Gmail account setup successfully!");
+      console.log(`\n✓ Gmail account ${profile.emailAddress} setup successfully!`);
+      
+      // Test the connection
+      console.log("\nTesting email access...");
+      try {
+        const emails = await client.getEmailsFromSender("noreply@tinkoff.ru", 1);
+        console.log(`✓ Test passed! Found ${emails.length} email(s) from Tinkoff.`);
+      } catch (testError) {
+        console.warn("⚠️  Could not fetch test emails, but setup completed.");
+      }
+      
     } catch (error: any) {
-      // If server fails, fall back to manual entry
-      if (error.message && error.message.includes('timeout')) {
-        console.log("\nServer timed out. Please enter the code manually.");
-        console.log("After authorization, copy the code from the URL.");
-        
-        const { code } = await inquirer.prompt([
-          {
-            type: "input",
-            name: "code",
-            message: "Enter the authorization code:",
-            validate: (input) => input.length > 0,
-          },
-        ]);
-        
-        const tokens = await oauth2Manager.getTokenFromCode(code);
-        await client.setTokens(tokens);
-        const profile = await client.getUserProfile();
-        
-        await db.upsertGmailAccount({
-          email: profile.emailAddress || "unknown",
-          refreshToken: tokens.refresh_token || "",
-        });
-        
-        console.log("✓ Gmail account setup successfully!");
+      console.error("\n✗ Failed to exchange code for tokens!");
+      
+      if (error.message?.includes("invalid_grant")) {
+        console.log("\n💡 Common causes and solutions:");
+        console.log("1. Code already used - Get a FRESH code");
+        console.log("2. Code expired - Complete the process quickly (within 1-2 minutes)");
+        console.log("3. Wrong code copied - Copy ONLY the code part or the entire URL");
+        console.log("4. Previous authorization - Revoke access at https://myaccount.google.com/permissions");
+        console.log("\nTry the setup again with a fresh authorization!");
       } else {
-        throw error;
+        console.log(`\nError details: ${error.message}`);
       }
     }
-    // This part is now handled in the try block above
+    
   } catch (error) {
     console.error("✗ Failed to setup Gmail account:", error);
   }

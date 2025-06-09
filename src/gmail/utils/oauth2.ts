@@ -38,10 +38,13 @@ export class OAuth2Manager {
       "https://www.googleapis.com/auth/gmail.modify",
     ];
 
-    // Use the redirect URI from credentials if available, otherwise use localhost
-    const redirectUri = credentials.redirect_uris && credentials.redirect_uris.length > 0
-      ? credentials.redirect_uris[0]
-      : "http://localhost/";
+    // Check if OOB redirect is in the redirect URIs
+    let redirectUri = "http://localhost/";
+    if (credentials.redirect_uris && credentials.redirect_uris.length > 0) {
+      // Prefer OOB if available
+      const oobUri = credentials.redirect_uris.find(uri => uri === "urn:ietf:wg:oauth:2.0:oob");
+      redirectUri = oobUri || credentials.redirect_uris[0];
+    }
 
     // Создаем OAuth2 клиент
     this.oauth2Client = new google.auth.OAuth2(
@@ -119,7 +122,26 @@ export class OAuth2Manager {
    * @returns Токены авторизации
    */
   async authorizeInteractive(): Promise<OAuth2Token> {
-    // Запускаем локальный сервер для получения кода
+    // Check the current redirect URI being used
+    const currentRedirectUri = (this.oauth2Client as any)._opts?.redirectUri || 
+                              (this.oauth2Client as any).redirectUri;
+    const useOobFlow = currentRedirectUri === "urn:ietf:wg:oauth:2.0:oob";
+    
+    if (useOobFlow) {
+      // Use manual code entry flow
+      const authUrl = this.getAuthUrl();
+      console.log("\n🔐 Gmail OAuth Setup");
+      console.log("1. Open this URL in your browser:");
+      console.log("\n" + authUrl + "\n");
+      console.log("2. Authorize the application");
+      console.log("3. Copy the authorization code");
+      console.log("4. Paste it here\n");
+      
+      const code = await this.promptForCode();
+      return await this.getTokenFromCode(code);
+    }
+    
+    // Original flow with local server
     const { startLocalServer } = await import("./localServer");
     
     // Try different ports - first try 80 (might need admin), then 3000, then 8080

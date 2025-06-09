@@ -36,7 +36,14 @@ if exist "data\gmail-credentials.json" (
 
 :SETUP
 echo.
-echo Starting Gmail setup...
+echo Starting Gmail setup (Manual Code Entry)...
 echo.
-bun run src/app.ts --cli
+echo This will use manual code entry for reliability.
+echo You'll need to:
+echo 1. Open a URL in your browser
+echo 2. Authorize the application
+echo 3. Copy the authorization code
+echo 4. Paste it here
+echo.
+bun run setup-gmail.ts
 pause

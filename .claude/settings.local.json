@@ -34,7 +34,14 @@
       "Bash(./debug-gmail-oauth.bat)",
       "Bash(cmd:*)",
       "Bash(rm:*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(chmod:*)",
+      "Bash(exit)",
+      "Bash(bun db:generate:*)",
+      "Bash(bun db:push:*)",
+      "Bash(./start.sh:*)",
+      "Bash(sudo:*)",
+      "Bash(sudo systemctl restart:*)"
     ],
     "deny": []
   }
