@@ -1,4 +1,15 @@
-import { PrismaClient, type Payout } from "../../generated/prisma";
+import { 
+  PrismaClient, 
+  type Payout,
+  type BybitAdvertisement,
+  type Transaction,
+  type ChatMessage,
+  type GateAccount,
+  type BybitAccount,
+  type GmailAccount,
+  type BlacklistedTransaction,
+  type SystemSettings
+} from "../../generated/prisma";
 
 interface GatePayoutData {
   id: number;
@@ -74,6 +85,16 @@ class DatabaseClient {
     await this.prisma.$disconnect();
   }
 
+  // ========== Payout Methods ==========
+
+  async getPayoutByGatePayoutId(gatePayoutId: number): Promise<Payout | null> {
+    return await this.executeWithRetry(async () => {
+      return await this.prisma.payout.findUnique({
+        where: { gatePayoutId },
+      });
+    }, "Get payout by Gate payout ID");
+  }
+
   async upsertPayoutFromGate(
     gatePayoutData: GatePayoutData,
     gateAccount: string,
@@ -121,49 +142,6 @@ class DatabaseClient {
     }, "Upsert payout");
   }
 
-  async upsertPayout(payoutData: Partial<Payout> & { gatePayoutId: number }): Promise<Payout> {
-    return await this.executeWithRetry(async () => {
-      return await this.prisma.payout.upsert({
-        where: { gatePayoutId: payoutData.gatePayoutId },
-        update: {
-          paymentMethodId: payoutData.paymentMethodId,
-          wallet: payoutData.wallet,
-          amountTrader: payoutData.amountTrader ?? undefined,
-          totalTrader: payoutData.totalTrader ?? undefined,
-          status: payoutData.status,
-          approvedAt: payoutData.approvedAt,
-          expiredAt: payoutData.expiredAt,
-          meta: payoutData.meta ?? undefined,
-          method: payoutData.method ?? undefined,
-          attachments: payoutData.attachments ?? undefined,
-          tooltip: payoutData.tooltip ?? undefined,
-          bank: payoutData.bank ?? undefined,
-          trader: payoutData.trader ?? undefined,
-          gateAccount: payoutData.gateAccount,
-        },
-        create: {
-          gatePayoutId: payoutData.gatePayoutId,
-          paymentMethodId: payoutData.paymentMethodId!,
-          wallet: payoutData.wallet!,
-          amountTrader: payoutData.amountTrader!,
-          totalTrader: payoutData.totalTrader!,
-          status: payoutData.status!,
-          approvedAt: payoutData.approvedAt,
-          expiredAt: payoutData.expiredAt,
-          createdAt: payoutData.createdAt || new Date(),
-          updatedAt: payoutData.updatedAt || new Date(),
-          meta: payoutData.meta!,
-          method: payoutData.method!,
-          attachments: payoutData.attachments!,
-          tooltip: payoutData.tooltip!,
-          bank: payoutData.bank!,
-          trader: payoutData.trader!,
-          gateAccount: payoutData.gateAccount!,
-        },
-      });
-    }, "Upsert payout");
-  }
-
   async getPayoutsByStatus(status: number): Promise<Payout[]> {
     return await this.executeWithRetry(async () => {
       return await this.prisma.payout.findMany({
@@ -173,79 +151,361 @@ class DatabaseClient {
     }, "Get payouts by status");
   }
 
-  async getPayoutsByGateAccount(gateAccount: string): Promise<Payout[]> {
+  async getPayoutsWithoutTransaction(status: number): Promise<Payout[]> {
     return await this.executeWithRetry(async () => {
       return await this.prisma.payout.findMany({
-        where: { gateAccount },
-        orderBy: { createdAt: "desc" },
-      });
-    }, "Get payouts by gate account");
-  }
-
-  async getPayoutsByStatusAndAccount(
-    status: number,
-    gateAccount: string,
-  ): Promise<Payout[]> {
-    return await this.executeWithRetry(async () => {
-      return await this.prisma.payout.findMany({
-        where: {
-          AND: [{ status }, { gateAccount }],
+        where: { 
+          status,
+          transaction: null
         },
-        orderBy: { createdAt: "desc" },
+        orderBy: { createdAt: "asc" },
       });
-    }, "Get payouts by status and account");
+    }, "Get payouts without transaction");
   }
 
-  async getPayoutById(id: string): Promise<Payout | null> {
+  // ========== Advertisement Methods ==========
+
+  async createAdvertisement(data: {
+    bybitAdId: string;
+    bybitAccountId: string;
+    side: string;
+    asset: string;
+    fiatCurrency: string;
+    price: string;
+    quantity: string;
+    minOrderAmount: string;
+    maxOrderAmount: string;
+    paymentMethod: string;
+    status: string;
+  }): Promise<BybitAdvertisement> {
     return await this.executeWithRetry(async () => {
-      return await this.prisma.payout.findUnique({
+      return await this.prisma.bybitAdvertisement.create({
+        data,
+      });
+    }, "Create advertisement");
+  }
+
+  async updateAdvertisement(
+    id: string,
+    data: Partial<BybitAdvertisement>,
+  ): Promise<BybitAdvertisement> {
+    return await this.executeWithRetry(async () => {
+      return await this.prisma.bybitAdvertisement.update({
         where: { id },
+        data,
       });
-    }, "Get payout by ID");
+    }, "Update advertisement");
   }
 
-  async getPayoutByGatePayoutId(gatePayoutId: number): Promise<Payout | null> {
+  async getActiveAdvertisementsByAccount(
+    bybitAccountId: string,
+  ): Promise<BybitAdvertisement[]> {
     return await this.executeWithRetry(async () => {
-      return await this.prisma.payout.findUnique({
-        where: { gatePayoutId },
+      return await this.prisma.bybitAdvertisement.findMany({
+        where: {
+          bybitAccountId,
+          status: "ONLINE",
+        },
       });
-    }, "Get payout by Gate payout ID");
+    }, "Get active advertisements by account");
   }
 
-  async getExpiredPayouts(): Promise<Payout[]> {
+  async countActiveAdvertisementsByAccount(
+    bybitAccountId: string,
+  ): Promise<number> {
     return await this.executeWithRetry(async () => {
-      return await this.prisma.payout.findMany({
-        where: { status: 5 }, // 5 = expired
-        orderBy: { expiredAt: "desc" },
+      return await this.prisma.bybitAdvertisement.count({
+        where: {
+          bybitAccountId,
+          status: "ONLINE",
+        },
       });
-    }, "Get expired payouts");
+    }, "Count active advertisements");
   }
 
-  async getPendingPayouts(): Promise<Payout[]> {
+  // ========== Transaction Methods ==========
+
+  async createTransaction(data: {
+    payoutId: string;
+    advertisementId: string;
+    status: string;
+  }): Promise<Transaction> {
     return await this.executeWithRetry(async () => {
-      return await this.prisma.payout.findMany({
-        where: { 
+      return await this.prisma.transaction.create({
+        data,
+      });
+    }, "Create transaction");
+  }
+
+  async updateTransaction(
+    id: string,
+    data: Partial<Transaction>,
+  ): Promise<Transaction> {
+    return await this.executeWithRetry(async () => {
+      return await this.prisma.transaction.update({
+        where: { id },
+        data,
+      });
+    }, "Update transaction");
+  }
+
+  async getActiveTransactions(): Promise<Transaction[]> {
+    return await this.executeWithRetry(async () => {
+      return await this.prisma.transaction.findMany({
+        where: {
           status: {
-            notIn: [5] // not expired
+            notIn: ["completed", "failed", "blacklisted"],
           },
-          approvedAt: null
         },
-        orderBy: { createdAt: "desc" },
+        include: {
+          payout: true,
+          advertisement: true,
+          chatMessages: true,
+        },
       });
-    }, "Get pending payouts");
+    }, "Get active transactions");
   }
 
-  async getApprovedPayouts(): Promise<Payout[]> {
+  async getTransactionWithDetails(id: string): Promise<Transaction | null> {
     return await this.executeWithRetry(async () => {
-      return await this.prisma.payout.findMany({
-        where: { 
-          NOT: {
-            approvedAt: null
-          }
+      return await this.prisma.transaction.findUnique({
+        where: { id },
+        include: {
+          payout: true,
+          advertisement: true,
+          chatMessages: {
+            orderBy: { createdAt: "asc" },
+          },
         },
-        orderBy: { approvedAt: "desc" },
       });
-    }, "Get approved payouts");
+    }, "Get transaction with details");
+  }
+
+  async getTransactionByOrderId(orderId: string): Promise<Transaction | null> {
+    return await this.executeWithRetry(async () => {
+      return await this.prisma.transaction.findFirst({
+        where: { orderId },
+        include: {
+          payout: true,
+          advertisement: true,
+        },
+      });
+    }, "Get transaction by order ID");
+  }
+
+  async getSuccessfulTransactionsForRelease(): Promise<Transaction[]> {
+    const twoMinutesAgo = new Date(Date.now() - 2 * 60 * 1000);
+    
+    return await this.executeWithRetry(async () => {
+      return await this.prisma.transaction.findMany({
+        where: {
+          status: "payment_received",
+          checkReceivedAt: {
+            lte: twoMinutesAgo,
+          },
+        },
+        include: {
+          payout: true,
+          advertisement: true,
+        },
+      });
+    }, "Get transactions for release");
+  }
+
+  // ========== Chat Methods ==========
+
+  async createChatMessage(data: {
+    transactionId: string;
+    messageId: string;
+    sender: string;
+    content: string;
+    messageType: string;
+  }): Promise<ChatMessage> {
+    return await this.executeWithRetry(async () => {
+      return await this.prisma.chatMessage.create({
+        data,
+      });
+    }, "Create chat message");
+  }
+
+  async markChatMessageProcessed(id: string): Promise<ChatMessage> {
+    return await this.executeWithRetry(async () => {
+      return await this.prisma.chatMessage.update({
+        where: { id },
+        data: { isProcessed: true },
+      });
+    }, "Mark chat message processed");
+  }
+
+  async getUnprocessedChatMessages(): Promise<ChatMessage[]> {
+    return await this.executeWithRetry(async () => {
+      return await this.prisma.chatMessage.findMany({
+        where: { isProcessed: false },
+        include: {
+          transaction: {
+            include: {
+              payout: true,
+              advertisement: true,
+            },
+          },
+        },
+        orderBy: { createdAt: "asc" },
+      });
+    }, "Get unprocessed chat messages");
+  }
+
+  // ========== Account Methods ==========
+
+  async upsertGateAccount(data: {
+    accountId: string;
+    email: string;
+    apiKey: string;
+    apiSecret: string;
+  }): Promise<GateAccount> {
+    return await this.executeWithRetry(async () => {
+      return await this.prisma.gateAccount.upsert({
+        where: { accountId: data.accountId },
+        update: {
+          email: data.email,
+          apiKey: data.apiKey,
+          apiSecret: data.apiSecret,
+          isActive: true,
+        },
+        create: data,
+      });
+    }, "Upsert Gate account");
+  }
+
+  async getActiveGateAccounts(): Promise<GateAccount[]> {
+    return await this.executeWithRetry(async () => {
+      return await this.prisma.gateAccount.findMany({
+        where: { isActive: true },
+      });
+    }, "Get active Gate accounts");
+  }
+
+  async upsertBybitAccount(data: {
+    accountId: string;
+    apiKey: string;
+    apiSecret: string;
+  }): Promise<BybitAccount> {
+    return await this.executeWithRetry(async () => {
+      return await this.prisma.bybitAccount.upsert({
+        where: { accountId: data.accountId },
+        update: {
+          apiKey: data.apiKey,
+          apiSecret: data.apiSecret,
+          isActive: true,
+        },
+        create: data,
+      });
+    }, "Upsert Bybit account");
+  }
+
+  async getActiveBybitAccounts(): Promise<BybitAccount[]> {
+    return await this.executeWithRetry(async () => {
+      return await this.prisma.bybitAccount.findMany({
+        where: { isActive: true },
+      });
+    }, "Get active Bybit accounts");
+  }
+
+  async getBybitAccountWithLeastAds(): Promise<BybitAccount | null> {
+    return await this.executeWithRetry(async () => {
+      const accounts = await this.prisma.bybitAccount.findMany({
+        where: { isActive: true },
+      });
+
+      if (accounts.length === 0) return null;
+
+      // Count active ads for each account
+      const accountsWithAdCounts = await Promise.all(
+        accounts.map(async (account) => {
+          const count = await this.countActiveAdvertisementsByAccount(
+            account.accountId,
+          );
+          return { account, count };
+        }),
+      );
+
+      // Sort by ad count and return the one with least ads
+      accountsWithAdCounts.sort((a, b) => a.count - b.count);
+      return accountsWithAdCounts[0].account;
+    }, "Get Bybit account with least ads");
+  }
+
+  async upsertGmailAccount(data: {
+    email: string;
+    refreshToken: string;
+  }): Promise<GmailAccount> {
+    return await this.executeWithRetry(async () => {
+      return await this.prisma.gmailAccount.upsert({
+        where: { email: data.email },
+        update: {
+          refreshToken: data.refreshToken,
+          isActive: true,
+        },
+        create: data,
+      });
+    }, "Upsert Gmail account");
+  }
+
+  async getActiveGmailAccount(): Promise<GmailAccount | null> {
+    return await this.executeWithRetry(async () => {
+      return await this.prisma.gmailAccount.findFirst({
+        where: { isActive: true },
+      });
+    }, "Get active Gmail account");
+  }
+
+  // ========== Blacklist Methods ==========
+
+  async addToBlacklist(data: {
+    payoutId: string;
+    reason: string;
+    wallet?: string;
+    amount?: string;
+  }): Promise<BlacklistedTransaction> {
+    return await this.executeWithRetry(async () => {
+      return await this.prisma.blacklistedTransaction.create({
+        data,
+      });
+    }, "Add to blacklist");
+  }
+
+  async isBlacklisted(wallet: string): Promise<boolean> {
+    return await this.executeWithRetry(async () => {
+      const count = await this.prisma.blacklistedTransaction.count({
+        where: { wallet },
+      });
+      return count > 0;
+    }, "Check if blacklisted");
+  }
+
+  // ========== Settings Methods ==========
+
+  async setSetting(key: string, value: string): Promise<SystemSettings> {
+    return await this.executeWithRetry(async () => {
+      return await this.prisma.systemSettings.upsert({
+        where: { key },
+        update: { value },
+        create: { key, value },
+      });
+    }, "Set setting");
+  }
+
+  async getSetting(key: string): Promise<string | null> {
+    return await this.executeWithRetry(async () => {
+      const setting = await this.prisma.systemSettings.findUnique({
+        where: { key },
+      });
+      return setting?.value || null;
+    }, "Get setting");
+  }
+
+  async isManualMode(): Promise<boolean> {
+    const mode = await this.getSetting("mode");
+    return mode === "manual";
   }
 
   get client() {
@@ -254,4 +514,15 @@ class DatabaseClient {
 }
 
 export const db = new DatabaseClient();
-export type { Payout, GatePayoutData };
+export type { 
+  Payout, 
+  GatePayoutData,
+  BybitAdvertisement,
+  Transaction,
+  ChatMessage,
+  GateAccount,
+  BybitAccount,
+  GmailAccount,
+  BlacklistedTransaction,
+  SystemSettings
+};

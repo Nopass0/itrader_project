@@ -100,9 +100,22 @@ export class HttpClient {
   private handleError(error: any): never {
     if (error.response?.data) {
       const errorData = error.response.data;
+      const statusCode = error.response.status;
+      
+      // Enhanced error messages for common P2P API errors
+      let errorMessage = errorData.retMsg || error.message;
+      
+      if (statusCode === 404) {
+        errorMessage = `Endpoint not found: ${error.config?.url}. This might indicate that P2P API permissions are not enabled for this API key or the endpoint has changed.`;
+      } else if (statusCode === 403) {
+        errorMessage = `Access forbidden: ${errorMessage}. Please ensure your API key has P2P permissions enabled and you are a verified P2P advertiser.`;
+      } else if (statusCode === 401) {
+        errorMessage = `Authentication failed: ${errorMessage}. Please check your API key and secret.`;
+      }
+      
       throw this.createError(
-        errorData.retMsg || error.message,
-        errorData.retCode || error.response.status,
+        errorMessage,
+        errorData.retCode || statusCode,
         errorData
       );
     }

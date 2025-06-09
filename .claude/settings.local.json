@@ -1,0 +1,41 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir:*)",
+      "Bash(find:*)",
+      "Bash(npx tsc:*)",
+      "mcp__bybit-api-docs__fetch_bybit_api_documentation",
+      "mcp__bybit-api-docs__search_bybit_api_documentation",
+      "Bash(bun run:*)",
+      "mcp__bybit-api-docs__fetch_generic_url_content",
+      "mcp__bybit-api-docs__search_bybit_api_code",
+      "WebFetch(domain:bybit-exchange.github.io)",
+      "mcp__fetch__fetch",
+      "Bash(timeout:*)",
+      "Bash(bun dev)",
+      "Bash(git branch:*)",
+      "Bash(git init:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git remote add:*)",
+      "Bash(git push:*)",
+      "WebFetch(domain:github.com)",
+      "Bash(npx prisma generate:*)",
+      "Bash(bun add:*)",
+      "Bash(npm install:*)",
+      "Bash(bunx prisma:*)",
+      "Bash(rm:*)",
+      "Bash(npm install:*)",
+      "Bash(bunx prisma:*)",
+      "mcp__sequential-thinking__sequentialthinking",
+      "Bash(bun x tsc:*)",
+      "Bash(grep:*)",
+      "Bash(bun build:*)",
+      "Bash(./debug-gmail-oauth.bat)",
+      "Bash(cmd:*)",
+      "Bash(rm:*)",
+      "Bash(ls:*)"
+    ],
+    "deny": []
+  }
+}

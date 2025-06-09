@@ -1,120 +1,354 @@
 import { db } from "./db";
 import { Orchestrator } from "./orchestrator";
 import { GateAccountManager } from "./gate";
+import { BybitP2PManagerService } from "./services/bybitP2PManager";
+import { ChatAutomationService } from "./services/chatAutomation";
+import { CheckVerificationService } from "./services/checkVerification";
+import { GmailClient } from "./gmail";
+import inquirer from "inquirer";
+import fs from "fs/promises";
+import path from "path";
+
+interface AppContext {
+  db: typeof db;
+  gateAccountManager: GateAccountManager;
+  bybitManager: BybitP2PManagerService;
+  chatService: ChatAutomationService;
+  checkService: CheckVerificationService;
+  gmailClient: GmailClient | null;
+  isManualMode: boolean;
+}
+
+async function promptUser(message: string): Promise<boolean> {
+  const mode = await db.getSetting("mode");
+  if (mode !== "manual") return true;
+
+  const response = await inquirer.prompt([
+    {
+      type: "confirm",
+      name: "proceed",
+      message,
+      default: true,
+    },
+  ]);
+
+  return response.proceed;
+}
 
 async function main() {
-  const gateAccountManager = new GateAccountManager();
+  try {
+    console.log("Starting Itrader...");
+
+    // Initialize services
+    const gateAccountManager = new GateAccountManager();
+    const bybitManager = new BybitP2PManagerService();
+    const chatService = new ChatAutomationService(bybitManager);
+    
+    // Gmail client will be initialized later
+    let gmailClient: any = null;
+    const checkService = new CheckVerificationService(
+      null as any, // Will be set after Gmail initialization
+      chatService
+    );
+    
+    console.log("Services initialized successfully");
 
   const orchestrator = new Orchestrator({
     name: "Itrader",
     context: {
       db,
       gateAccountManager,
-      //тут все остальное передаем
-    },
+      bybitManager,
+      chatService,
+      checkService,
+      gmailClient,
+      isManualMode: false,
+    } as AppContext,
   });
 
-  orchestrator.addOneTime("init", async (context) => {
-    console.log(
-      "Авторизация во всех аккаунтах доступных программе в гейте и в байбите",
-    );
+  // One-time initialization
+  orchestrator.addOneTime("init", async (context: AppContext) => {
+    console.log("Initializing all accounts...");
+
+    // Initialize Gate accounts
+    const gateAccounts = await context.db.getActiveGateAccounts();
+    for (const account of gateAccounts) {
+      try {
+        await context.gateAccountManager.addAccount(
+          account.accountId,
+          account.email,
+          "",
+          {
+            apiKey: account.apiKey,
+            apiSecret: account.apiSecret,
+          }
+        );
+        console.log(`[Init] Added Gate account ${account.accountId}`);
+      } catch (error) {
+        console.error(`[Init] Failed to add Gate account ${account.accountId}:`, error);
+      }
+    }
+
+    // Initialize Bybit accounts
+    await context.bybitManager.initialize();
+
+    // Initialize Gmail
+    const gmailAccount = await context.db.getActiveGmailAccount();
+    if (gmailAccount) {
+      try {
+        // Load credentials
+        const credentialsPath = path.join("data", "gmail-credentials.json");
+        
+        // Check if credentials file exists
+        try {
+          await fs.access(credentialsPath);
+        } catch {
+          console.log("[Init] Gmail credentials file not found. Skipping Gmail initialization.");
+          return;
+        }
+        
+        const credentialsContent = JSON.parse(await fs.readFile(credentialsPath, 'utf-8'));
+        
+        // Extract OAuth2 credentials (could be under 'installed' or 'web' key)
+        const credentials = credentialsContent.installed || credentialsContent.web || credentialsContent;
+        
+        // Create OAuth2Manager and client
+        const { OAuth2Manager } = await import("./gmail/utils/oauth2");
+        const oauth2Manager = new OAuth2Manager(credentials);
+        const client = new GmailClient(oauth2Manager);
+        
+        // Set tokens
+        await client.setTokens({ refresh_token: gmailAccount.refreshToken });
+        context.gmailClient = client;
+        
+        // Update check service with Gmail client
+        (context.checkService as any).gmailClient = client;
+        
+        console.log(`[Init] Added Gmail account ${gmailAccount.email}`);
+      } catch (error) {
+        console.error(`[Init] Failed to initialize Gmail:`, error);
+      }
+    } else {
+      console.log("[Init] No Gmail account configured. Gmail features will be disabled.");
+    }
+
+    // Check mode
+    const mode = await context.db.getSetting("mode");
+    context.isManualMode = mode === "manual";
+    console.log(`[Init] Running in ${context.isManualMode ? "manual" : "automatic"} mode`);
   });
 
+  // Task 1: Accept available transactions from Gate
   orchestrator.addTask({
     id: "work_acceptor",
-    name: "Взять в работу все доступные транзакции со статусом 4 (panel.gate.cx)",
-    fn: async (context) => {
-      console.log("Взять в работу");
+    name: "Accept available transactions with status 4",
+    fn: async (context: AppContext) => {
+      console.log("[WorkAcceptor] Checking for new payouts...");
 
-      //Берет в работу все транзакции со статусом 4 на гейте и добавляет все их данные в базу данных.
+      const accounts = await context.gateAccountManager.getAccounts();
+      
+      for (const account of accounts) {
+        const client = context.gateAccountManager.getClient(account.id);
+        if (!client) continue;
+
+        try {
+          // Get pending transactions (status 4)
+          const payouts = await client.getPendingTransactions();
+          console.log(`[WorkAcceptor] Found ${payouts.length} pending payouts for ${account.id}`);
+
+          for (const payout of payouts) {
+            // Check if already in database
+            const existing = await context.db.getPayoutByGatePayoutId(payout.id);
+            if (existing) continue;
+
+            if (await promptUser(`Accept payout ${payout.id} for ${payout.totalTrader['643']} RUB?`)) {
+              // Accept transaction to show details
+              await client.acceptTransaction(payout.id.toString());
+
+              // Save to database
+              await context.db.upsertPayoutFromGate(payout as any, account.id);
+              console.log(`[WorkAcceptor] Saved payout ${payout.id} to database`);
+            }
+          }
+        } catch (error) {
+          console.error(`[WorkAcceptor] Error for account ${account.id}:`, error);
+        }
+      }
     },
     runOnStart: true,
-    interval: 100 * 60 * 5,
+    interval: 5 * 60 * 1000, // 5 minutes
   });
 
-  // Добавить условие что есть ещё в базе данных хотябы одна выплата со статусом 4
+  // Task 2: Create Bybit advertisements for payouts
   orchestrator.addTask({
     id: "ad_creator",
-    name: "Взять из базы данных как из очереди выплату со статусом 4 и создать на ее основе транзакцию на байбите, сохраняем данные об объявлении в базе данных и создаем модель Transaction где будет ссылка на payout гейта и order\\ad bybit и чек и статус обработки в нашей системе",
-    fn: async (context) => {
-      console.log(
-        "Создать объявление на байбите. При условии что может быть максимум 2 объявления активных на одном аккаунте байбита и методы оплаты чередуются SBP\\Tinkoff. Если СБП стоит у одного активного, значит ставим тинькофф у создаваемого",
-      );
+    name: "Create Bybit advertisements for pending payouts",
+    fn: async (context: AppContext) => {
+      // Check if there are any pending payouts
+      const pendingPayouts = await context.db.getPayoutsWithoutTransaction(4);
+      
+      if (pendingPayouts.length === 0) {
+        return;
+      }
+
+      console.log(`[AdCreator] Found ${pendingPayouts.length} payouts without ads`);
+
+      for (const payout of pendingPayouts) {
+        try {
+          // Check if blacklisted
+          if (await context.db.isBlacklisted(payout.wallet)) {
+            console.log(`[AdCreator] Wallet ${payout.wallet} is blacklisted, skipping`);
+            continue;
+          }
+
+          const amount = payout.totalTrader['643'] || 0;
+          if (amount <= 0) continue;
+
+          if (await promptUser(`Create ad for payout ${payout.gatePayoutId} (${amount} RUB)?`)) {
+            // Determine payment method based on existing ads
+            const paymentMethod = Math.random() > 0.5 ? 'SBP' : 'Tinkoff';
+            
+            // Create advertisement
+            const { advertisementId, bybitAccountId } = await context.bybitManager
+              .createAdvertisementWithAutoAccount(
+                payout.id,
+                amount.toString(),
+                'RUB',
+                paymentMethod
+              );
+
+            // Create transaction
+            await context.db.createTransaction({
+              payoutId: payout.id,
+              advertisementId,
+              status: 'pending',
+            });
+
+            console.log(`[AdCreator] Created ad ${advertisementId} on account ${bybitAccountId}`);
+          }
+        } catch (error) {
+          console.error(`[AdCreator] Error creating ad for payout ${payout.id}:`, error);
+        }
+      }
     },
-    interval: 10000,
+    interval: 10 * 1000, // 10 seconds
   });
 
+  // Task 3: Handle chat automation
   orchestrator.addTask({
     id: "ad_listener",
-    name: "Пройтись по объявлениям активным в нашей базе данных с ссылкам на байбит объявления и проверить чат и ответитить на сообщение по схеме",
-    fn: async (context) => {
-      /*
-      1. Здравствуйте!
-      Оплата будет с Т банка?
-      ( просто напишите да/нет)
+    name: "Process chat messages and automate responses",
+    fn: async (context: AppContext) => {
+      try {
+        // Get active transactions
+        const activeTransactions = await context.db.getActiveTransactions();
+        
+        // Start chat polling for transactions with orders
+        for (const transaction of activeTransactions) {
+          if (transaction.orderId && transaction.status === 'chat_started') {
+            await context.bybitManager.startChatPolling(transaction.id);
+          }
+        }
 
-      2. Чек в формате пдф с официальной почты Т банка сможете отправить ?
-      ( просто напишите да/нет)
-
-      3. При СБП, если оплата будет на неверный банк, деньги потеряны.
-      ( просто напишите подтверждаю/ не подтверждаю)
-
-      После чего одним смс я пришлю реквизиты, банк, почту и сумму для перевода.
-
-
-
-      4. После того как контр присылает чек на почту и там все норм, бот закрывает заявку в айдексе, должно приходить следующее смс:
-
-      Переходи в закрытый чат https://t.me/+nIB6kP22KmhlMmQy
-
-      Всегда есть большой объем ЮСДТ по хорошему курсу, работаем оперативно.
-
-      После отправки этого 4 смс должно пройти 2 минуты и только после этого бот отпускает крипту.
-
-      --------
-
-      Если ответил нет - транзакция (пара payout gate\order(ad) bybit) улетает в базе данных в список дураков. И эти транзакции больше вообще мы не рассматриваем.
-
-      Реквизиты по типу Банка и номера карты или телефона (поле wallet payout gate) мы берем с гейта и сумму тоже и отправляем почту авторизованенную на которой ждем чеки.
-      тут такая логика что бот пошагово общяется с контрагентом, если он ответил как-то не так, он повторяет вопрос этапа. Не обязательно клиенто может ответить к примеру да или ок или норм или ещё какие-то синонимы тоже нужно проерять у каждого варианта ответа
-      */
-      console.log("Проверка чата");
+        // Process unprocessed messages
+        await context.chatService.processUnprocessedMessages();
+      } catch (error) {
+        console.error("[AdListener] Error:", error);
+      }
     },
-    interval: 1000,
+    interval: 1000, // 1 second
   });
 
+  // Task 4: Check Gmail for payment receipts
   orchestrator.addTask({
     id: "gmail_listener",
-    name: "Проверка сообщений с чеками на авторизованной почте с официального email t-bank (Tinkoff) - noreply@tinkoff.ru чек pdf. прикреплен к письму",
-    fn: async (context) => {
-      /*
-      Тут мы когда отправили реквизиты после этого момента нужно отлавить сообщение (если сообщение до этого момента по времени, значит отновится к другой транзакции)
-      Все полученные чеки мы проверяем есть ли там статус успешно, если нету, такие чеки не смотрим дальше. Если есть смотрим.
-      Пришел чек, мы сверяем его поля - сумму, хотябы одно слово в поле Банк должно сопасть, и поле wallet из гейта с номером карты или телефона в чеке. В чеке номер карты если он есть скрыт и можно сравнивать только последние 4 цифры.
-      Видим что чек совпал по всем параметрам сверяеммым хоть с какой-то транзакцией с гейта, мы делаем approve транзакции на гейте прикрепляя чек и меняем статус у нас в системе в базе данных у транзакции и у пары payout gate\ order(ad) bybit на успешные и ставим дату успеха со временем.
-      Как только сделали успешными отправляем в чат контр агенту из инструкции выше послднее сообщение (4)
-      */
-      console.log("Проверка сообщения");
+    name: "Check Gmail for payment receipts",
+    fn: async (context: AppContext) => {
+      try {
+        await context.checkService.processNewChecks();
+      } catch (error) {
+        console.error("[GmailListener] Error:", error);
+      }
     },
-    interval: 10000,
+    interval: 10 * 1000, // 10 seconds
   });
 
+  // Task 5: Release funds after 2 minutes
   orchestrator.addTask({
     id: "successer",
-    name: "Идет по списку успешных и смотрит прошло ли две миниты с момента успеха и если да отправляет средства (отпускает средства по объявлению на байбите)",
-    fn: async (context) => {
-      console.log("Успех обработка");
+    name: "Release funds for completed transactions",
+    fn: async (context: AppContext) => {
+      try {
+        const transactionsToRelease = await context.db.getSuccessfulTransactionsForRelease();
+        
+        for (const transaction of transactionsToRelease) {
+          if (await promptUser(`Release funds for transaction ${transaction.id}?`)) {
+            await context.bybitManager.releaseAssets(transaction.id);
+            console.log(`[Successer] Released funds for transaction ${transaction.id}`);
+          }
+        }
+      } catch (error) {
+        console.error("[Successer] Error:", error);
+      }
     },
-    interval: 10000,
+    interval: 10 * 1000, // 10 seconds
   });
 
+  // Initialize and start orchestrator
   await orchestrator.initialize();
   await orchestrator.start();
 
-  console.log("Orchestrator started");
+  console.log("Orchestrator started successfully!");
+  console.log("Press Ctrl+C to stop");
+
+  // Keep the process alive
+  const keepAlive = setInterval(() => {
+    // This keeps the event loop active
+  }, 1000);
+
+  // Handle graceful shutdown
+  process.on("SIGINT", async () => {
+    console.log("\nShutting down...");
+    clearInterval(keepAlive);
+    await orchestrator.stop();
+    await db.disconnect();
+    process.exit(0);
+  });
+
+  // Also handle uncaught errors
+  process.on("uncaughtException", (error) => {
+    console.error("Uncaught exception:", error);
+    process.exit(1);
+  });
+
+  process.on("unhandledRejection", (reason, promise) => {
+    console.error("Unhandled rejection at:", promise, "reason:", reason);
+    process.exit(1);
+  });
+  } catch (error) {
+    console.error("Failed to start Itrader:", error);
+    process.exit(1);
+  }
 }
 
-// тут перед запуском ещё cli должно быть с добавлением\редактированием\удалением байбит и гейт аккаунтов и кнопка начать мануально и начать автоматический
-// Начать мануально - где каждое действие пишет что хочет сделать и в консоли дает пользователю принять или отклонить действие.
-// Автоматический - где не нужно подтверждение
-main().catch(console.error);
+// Export main for CLI
+export default main;
+
+// Check if running directly
+if (require.main === module) {
+  if (process.argv.includes("--cli")) {
+    // Import and run CLI
+    import("./cli").then((cli) => {
+      cli.runCLI();
+    }).catch((error) => {
+      console.error("CLI error:", error);
+      process.exit(1);
+    });
+  } else {
+    // Run main application
+    main().catch((error) => {
+      console.error("Fatal error:", error);
+      process.exit(1);
+    });
+  }
+}

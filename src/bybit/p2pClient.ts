@@ -71,7 +71,7 @@ export class P2PClient extends EventEmitter {
    * Get account information
    */
   async getAccountInfo(): Promise<any> {
-    return await this.httpClient.get('/v5/p2p/account/info');
+    return await this.httpClient.post('/v5/p2p/user/personal/info', {});
   }
 
   // ========== Advertisement Methods ==========
@@ -80,9 +80,9 @@ export class P2PClient extends EventEmitter {
    * Get all active advertisements
    */
   async getActiveAdvertisements(filter?: AdvertisementFilter): Promise<PaginatedResponse<P2PAdvertisement>> {
-    const response = await this.httpClient.get<PaginatedResponse<P2PAdvertisement>>(
+    const response = await this.httpClient.post<PaginatedResponse<P2PAdvertisement>>(
       '/v5/p2p/item/online',
-      filter
+      filter || {}
     );
     return response.result;
   }
@@ -91,7 +91,7 @@ export class P2PClient extends EventEmitter {
    * Get my advertisements
    */
   async getMyAdvertisements(page: number = 1, pageSize: number = 20): Promise<PaginatedResponse<P2PAdvertisement>> {
-    const response = await this.httpClient.get<PaginatedResponse<P2PAdvertisement>>(
+    const response = await this.httpClient.post<PaginatedResponse<P2PAdvertisement>>(
       '/v5/p2p/item/personal/list',
       { page, pageSize }
     );
@@ -102,7 +102,7 @@ export class P2PClient extends EventEmitter {
    * Get advertisement details
    */
   async getAdvertisementDetails(itemId: string): Promise<P2PAdvertisement> {
-    const response = await this.httpClient.get<P2PAdvertisement>(
+    const response = await this.httpClient.post<P2PAdvertisement>(
       '/v5/p2p/item/info',
       { itemId }
     );
@@ -151,7 +151,7 @@ export class P2PClient extends EventEmitter {
    * Get all orders
    */
   async getOrders(filter?: OrderFilter, page: number = 1, pageSize: number = 20): Promise<PaginatedResponse<P2POrder>> {
-    const response = await this.httpClient.get<PaginatedResponse<P2POrder>>(
+    const response = await this.httpClient.post<PaginatedResponse<P2POrder>>(
       '/v5/p2p/order/simplifyList',
       { ...filter, page, pageSize }
     );
@@ -162,7 +162,7 @@ export class P2PClient extends EventEmitter {
    * Get pending orders
    */
   async getPendingOrders(page: number = 1, pageSize: number = 20): Promise<PaginatedResponse<P2POrder>> {
-    const response = await this.httpClient.get<PaginatedResponse<P2POrder>>(
+    const response = await this.httpClient.post<PaginatedResponse<P2POrder>>(
       '/v5/p2p/order/pending/simplifyList',
       { page, pageSize }
     );
@@ -173,7 +173,7 @@ export class P2PClient extends EventEmitter {
    * Get order details
    */
   async getOrderDetails(orderId: string): Promise<P2POrder> {
-    const response = await this.httpClient.get<P2POrder>(
+    const response = await this.httpClient.post<P2POrder>(
       '/v5/p2p/order/info',
       { orderId }
     );
@@ -210,8 +210,8 @@ export class P2PClient extends EventEmitter {
    * Get chat messages for order
    */
   async getChatMessages(orderId: string, page: number = 1, pageSize: number = 50): Promise<PaginatedResponse<ChatMessage>> {
-    const response = await this.httpClient.get<PaginatedResponse<ChatMessage>>(
-      '/v5/p2p/order/message/list',
+    const response = await this.httpClient.post<PaginatedResponse<ChatMessage>>(
+      '/v5/p2p/order/message/listpage',
       { orderId, page, pageSize }
     );
     return response.result;
@@ -250,8 +250,9 @@ export class P2PClient extends EventEmitter {
    * Get my payment methods
    */
   async getPaymentMethods(): Promise<PaymentMethod[]> {
-    const response = await this.httpClient.get<PaymentMethod[]>(
-      '/v5/p2p/payment/list'
+    const response = await this.httpClient.post<PaymentMethod[]>(
+      '/v5/p2p/user/payment/list',
+      {}
     );
     return response.result;
   }

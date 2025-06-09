@@ -38,10 +38,10 @@ export class OAuth2Manager {
       "https://www.googleapis.com/auth/gmail.modify",
     ];
 
-    // Используем OOB redirect URI для показа кода в браузере или берем из credentials
-    const redirectUri = useOobRedirect 
-      ? "urn:ietf:wg:oauth:2.0:oob"
-      : credentials.redirect_uris[0];
+    // Use the redirect URI from credentials if available, otherwise use localhost
+    const redirectUri = credentials.redirect_uris && credentials.redirect_uris.length > 0
+      ? credentials.redirect_uris[0]
+      : "http://localhost/";
 
     // Создаем OAuth2 клиент
     this.oauth2Client = new google.auth.OAuth2(
@@ -119,14 +119,29 @@ export class OAuth2Manager {
    * @returns Токены авторизации
    */
   async authorizeInteractive(): Promise<OAuth2Token> {
-    const authUrl = this.getAuthUrl();
-
-    console.log("Авторизация Gmail:");
-    console.log("1. Откройте следующую ссылку в браузере:");
-    console.log(authUrl);
-    console.log("2. Разрешите доступ к вашей учетной записи");
-    console.log("3. Скопируйте код авторизации");
-
+    // Запускаем локальный сервер для получения кода
+    const { startLocalServer } = await import("./localServer");
+    
+    // Try different ports - first try 80 (might need admin), then 3000, then 8080
+    const ports = [80, 3000, 8080];
+    
+    for (const port of ports) {
+      try {
+        console.log(`\nПытаемся запустить сервер на порту ${port}...`);
+        const code = await startLocalServer(port);
+        return await this.getTokenFromCode(code);
+      } catch (error: any) {
+        if (error.message && error.message.includes('Сервер')) {
+          console.log(`Не удалось запустить на порту ${port}`);
+          continue;
+        }
+        throw error;
+      }
+    }
+    
+    // Fallback to manual code entry
+    console.log("\nНе удалось запустить локальный сервер.");
+    console.log("Введите код вручную:");
     const code = await this.promptForCode();
     return await this.getTokenFromCode(code);
   }
@@ -164,7 +179,17 @@ export class OAuth2Manager {
       this.oauth2Client.setCredentials(tokens);
 
       return tokens as OAuth2Token;
-    } catch (error: unknown) {
+    } catch (error: any) {
+      // More detailed error handling
+      if (error.response?.data?.error === 'invalid_grant') {
+        throw new GmailAuthError(
+          "Invalid authorization code. Please get a fresh code and try again.\n" +
+          "Common causes:\n" +
+          "- Code already used (each code can only be used once)\n" +
+          "- Code expired (codes expire after a few minutes)\n" +
+          "- Wrong redirect URI in credentials"
+        );
+      }
       if (error instanceof Error) {
         throw new GmailAuthError(
           `Ошибка получения токена: ${error.message}`,
