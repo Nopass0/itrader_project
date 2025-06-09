@@ -8,6 +8,7 @@ import { GateClient } from "./gate/client";
 import { RateLimiter } from "./gate/utils/rateLimiter";
 import { P2PClient } from "./bybit";
 import { GmailClient } from "./gmail";
+import { getExchangeRateManager } from "./services/exchangeRateManager";
 import fs from "fs/promises";
 import path from "path";
 
@@ -31,6 +32,7 @@ export async function runCLI() {
           { name: "Manage Gate accounts", value: "gate" },
           { name: "Manage Bybit accounts", value: "bybit" },
           { name: "Manage Gmail account", value: "gmail" },
+          { name: "Exchange rate settings", value: "exchangeRate" },
           { name: "Switch mode (Manual/Automatic)", value: "mode" },
           { name: "Database management", value: "database" },
           { name: "Start application", value: "start" },
@@ -48,6 +50,9 @@ export async function runCLI() {
         break;
       case "gmail":
         await manageGmailAccount();
+        break;
+      case "exchangeRate":
+        await manageExchangeRate();
         break;
       case "mode":
         await switchMode();
@@ -812,6 +817,102 @@ async function switchMode() {
   console.log(`✓ Mode switched to ${mode}`);
   
   await inquirer.prompt([{ type: "input", name: "continue", message: "Press Enter to continue..." }]);
+}
+
+async function manageExchangeRate() {
+  const { action } = await inquirer.prompt([
+    {
+      type: "list",
+      name: "action",
+      message: "Exchange rate management:",
+      choices: [
+        "View current rate",
+        "Set exchange rate",
+        "Switch rate mode",
+        "Back",
+      ],
+    },
+  ]);
+
+  const rateManager = getExchangeRateManager();
+
+  switch (action) {
+    case "View current rate":
+      {
+        const config = rateManager.getConfig();
+        const currentRate = rateManager.getRate();
+        
+        console.log("\nExchange Rate Settings:");
+        console.log("======================");
+        console.log(`Mode: ${config.mode}`);
+        console.log(`Current rate: ${currentRate.toFixed(2)} RUB/USDT`);
+        console.log(`Last updated: ${config.lastUpdate.toLocaleString()}`);
+        
+        if (config.mode === 'automatic') {
+          console.log("\n⚠️  Note: Automatic mode is not yet implemented");
+          console.log("The system will use the constant rate even in automatic mode");
+        }
+        
+        await inquirer.prompt([{ type: "input", name: "continue", message: "Press Enter to continue..." }]);
+      }
+      break;
+      
+    case "Set exchange rate":
+      {
+        const currentRate = rateManager.getRate();
+        console.log(`\nCurrent exchange rate: ${currentRate.toFixed(2)} RUB/USDT`);
+        
+        const { rate } = await inquirer.prompt([
+          {
+            type: "number",
+            name: "rate",
+            message: "Enter new exchange rate (RUB/USDT):",
+            default: currentRate,
+            validate: (input) => {
+              if (isNaN(input) || input <= 0) {
+                return "Rate must be a positive number";
+              }
+              return true;
+            },
+          },
+        ]);
+        
+        rateManager.setRate(rate);
+        console.log(`✓ Exchange rate updated to ${rate.toFixed(2)} RUB/USDT`);
+        
+        await inquirer.prompt([{ type: "input", name: "continue", message: "Press Enter to continue..." }]);
+      }
+      break;
+      
+    case "Switch rate mode":
+      {
+        const config = rateManager.getConfig();
+        console.log(`\nCurrent mode: ${config.mode}`);
+        
+        const { mode } = await inquirer.prompt([
+          {
+            type: "list",
+            name: "mode",
+            message: "Select exchange rate mode:",
+            choices: [
+              { name: "Constant - Use fixed rate", value: "constant" },
+              { name: "Automatic - Auto-update rate (not implemented)", value: "automatic" },
+            ],
+          },
+        ]);
+        
+        rateManager.setMode(mode);
+        console.log(`✓ Exchange rate mode switched to ${mode}`);
+        
+        if (mode === 'automatic') {
+          console.log("\n⚠️  Note: Automatic mode is not yet implemented");
+          console.log("The system will continue using the constant rate");
+        }
+        
+        await inquirer.prompt([{ type: "input", name: "continue", message: "Press Enter to continue..." }]);
+      }
+      break;
+  }
 }
 
 async function manageDatabase() {

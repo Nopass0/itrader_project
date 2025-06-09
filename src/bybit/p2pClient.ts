@@ -32,6 +32,23 @@ export class P2PClient extends EventEmitter {
     super();
     this.config = config;
     this.httpClient = new HttpClient(config);
+    
+    // Initialize time sync on client creation
+    this.initializeTimeSync();
+  }
+  
+  /**
+   * Initialize time synchronization
+   */
+  private async initializeTimeSync(): Promise<void> {
+    try {
+      const { TimeSync } = await import('./utils/timeSync');
+      if (!TimeSync.isSynchronized()) {
+        await TimeSync.forceSync(this.config.testnet);
+      }
+    } catch (error) {
+      console.warn('[P2PClient] Time sync initialization failed:', error);
+    }
   }
 
   /**
@@ -90,13 +107,37 @@ export class P2PClient extends EventEmitter {
 
   /**
    * Get my advertisements
+   * Note: This endpoint doesn't support pagination parameters
    */
-  async getMyAdvertisements(page: number = 1, pageSize: number = 20): Promise<PaginatedResponse<P2PAdvertisement>> {
-    const response = await this.httpClient.post<PaginatedResponse<P2PAdvertisement>>(
+  async getMyAdvertisements(): Promise<PaginatedResponse<P2PAdvertisement>> {
+    const response = await this.httpClient.post<any>(
       '/v5/p2p/item/personal/list',
-      { page, pageSize }
+      {}
     );
-    return response.result;
+    
+    // Ensure we have a valid response with result property
+    if (!response || !response.result) {
+      console.warn('[P2PClient] getMyAdvertisements returned invalid response:', response);
+      // Return empty list response
+      return {
+        list: [],
+        page: 1,
+        pageSize: 20,
+        totalCount: 0,
+        totalPage: 0
+      };
+    }
+    
+    // Map Bybit's response structure to our expected format
+    // Bybit returns { count, items, hiddenFlag } but we expect { list, page, pageSize, totalCount, totalPage }
+    const result = response.result;
+    return {
+      list: result.items || [],
+      page: 1,
+      pageSize: result.count || 0,
+      totalCount: result.count || 0,
+      totalPage: 1
+    };
   }
 
   /**
@@ -259,6 +300,18 @@ export class P2PClient extends EventEmitter {
     
     if (this.config.debugMode) {
       console.log('[P2PClient] Raw payment methods response:', JSON.stringify(response, null, 2));
+    }
+    
+    // Ensure we have a valid response with result property
+    if (!response || !response.result) {
+      console.warn('[P2PClient] getPaymentMethods returned invalid response:', response);
+      return [];
+    }
+    
+    // Ensure result is an array
+    if (!Array.isArray(response.result)) {
+      console.warn('[P2PClient] getPaymentMethods result is not an array:', response.result);
+      return [];
     }
     
     return response.result;

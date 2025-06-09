@@ -151,7 +151,7 @@ async function multiAccountExample() {
     const updatePromises = allAccounts
       .filter(acc => acc.isActive)
       .map(async (account) => {
-        const myAds = await manager.getMyAdvertisements(1, 20, account.id);
+        const myAds = await manager.getMyAdvertisements(account.id);
         
         // Update all online ads
         for (const ad of myAds.list) {

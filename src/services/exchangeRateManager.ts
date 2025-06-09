@@ -3,7 +3,7 @@
  * Manages exchange rates for P2P advertisements with support for constant and automatic modes
  */
 
-export type ExchangeRateMode = 'constant' | 'automatic';
+export type ExchangeRateMode = "constant" | "automatic";
 
 interface ExchangeRateConfig {
   mode: ExchangeRateMode;
@@ -18,9 +18,9 @@ class ExchangeRateManager {
 
   private constructor() {
     this.config = {
-      mode: 'constant',
-      constantRate: 85.0, // Default RUB/USDT rate (within Bybit's allowed range)
-      lastUpdate: new Date()
+      mode: "constant",
+      constantRate: 78.2, // Default RUB/USDT rate (within Bybit's allowed range)
+      lastUpdate: new Date(),
     };
   }
 
@@ -40,12 +40,12 @@ class ExchangeRateManager {
    */
   public getRate(): number {
     switch (this.config.mode) {
-      case 'constant':
+      case "constant":
         return this.config.constantRate;
-      case 'automatic':
+      case "automatic":
         // TODO: Implement automatic rate fetching
         // For now, fall back to constant rate
-        console.warn('Automatic mode not yet implemented, using constant rate');
+        console.warn("Automatic mode not yet implemented, using constant rate");
         return this.config.constantRate;
       default:
         return this.config.constantRate;
@@ -58,15 +58,15 @@ class ExchangeRateManager {
    */
   public setRate(rate: number): void {
     if (rate <= 0) {
-      throw new Error('Exchange rate must be positive');
+      throw new Error("Exchange rate must be positive");
     }
 
     this.config.constantRate = rate;
     this.config.lastUpdate = new Date();
-    
+
     // Notify listeners
     this.notifyListeners(rate);
-    
+
     console.log(`Exchange rate updated to ${rate} RUB/USDT`);
   }
 
@@ -75,17 +75,21 @@ class ExchangeRateManager {
    * @param mode The mode to set ('constant' or 'automatic')
    */
   public setMode(mode: ExchangeRateMode): void {
-    if (mode !== 'constant' && mode !== 'automatic') {
-      throw new Error(`Invalid mode: ${mode}. Must be 'constant' or 'automatic'`);
+    if (mode !== "constant" && mode !== "automatic") {
+      throw new Error(
+        `Invalid mode: ${mode}. Must be 'constant' or 'automatic'`,
+      );
     }
 
     const previousMode = this.config.mode;
     this.config.mode = mode;
-    
+
     console.log(`Exchange rate mode changed from ${previousMode} to ${mode}`);
-    
-    if (mode === 'automatic') {
-      console.warn('Automatic mode selected but not yet implemented. Rate will remain constant.');
+
+    if (mode === "automatic") {
+      console.warn(
+        "Automatic mode selected but not yet implemented. Rate will remain constant.",
+      );
       // TODO: Start automatic rate fetching when implemented
     }
   }
@@ -105,7 +109,7 @@ class ExchangeRateManager {
    */
   public onRateUpdate(listener: (rate: number) => void): () => void {
     this.rateUpdateListeners.push(listener);
-    
+
     // Return unsubscribe function
     return () => {
       const index = this.rateUpdateListeners.indexOf(listener);
@@ -120,11 +124,11 @@ class ExchangeRateManager {
    * @param rate The new rate
    */
   private notifyListeners(rate: number): void {
-    this.rateUpdateListeners.forEach(listener => {
+    this.rateUpdateListeners.forEach((listener) => {
       try {
         listener(rate);
       } catch (error) {
-        console.error('Error in rate update listener:', error);
+        console.error("Error in rate update listener:", error);
       }
     });
   }
@@ -134,16 +138,16 @@ class ExchangeRateManager {
    * @returns Promise that resolves to the new rate
    */
   public async updateRateAsync(): Promise<number> {
-    if (this.config.mode === 'automatic') {
+    if (this.config.mode === "automatic") {
       // TODO: Implement automatic rate fetching from external sources
       // For example:
       // const newRate = await fetchRateFromExternalAPI();
       // this.setRate(newRate);
       // return newRate;
-      
-      console.warn('Automatic rate update not yet implemented');
+
+      console.warn("Automatic rate update not yet implemented");
     }
-    
+
     return this.getRate();
   }
 
@@ -152,11 +156,11 @@ class ExchangeRateManager {
    */
   public reset(): void {
     this.config = {
-      mode: 'constant',
-      constantRate: 92.5,
-      lastUpdate: new Date()
+      mode: "constant",
+      constantRate: 78.2,
+      lastUpdate: new Date(),
     };
-    console.log('Exchange rate manager reset to defaults');
+    console.log("Exchange rate manager reset to defaults");
   }
 }
 

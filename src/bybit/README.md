@@ -99,7 +99,7 @@ await client.getAccountInfo(): Promise<any>
 await client.getActiveAdvertisements(filter?: AdvertisementFilter): Promise<PaginatedResponse<P2PAdvertisement>>
 
 // Get my advertisements
-await client.getMyAdvertisements(page?: number, pageSize?: number): Promise<PaginatedResponse<P2PAdvertisement>>
+await client.getMyAdvertisements(): Promise<PaginatedResponse<P2PAdvertisement>>  // Note: Returns all ads, no pagination
 
 // Get advertisement details
 await client.getAdvertisementDetails(itemId: string): Promise<P2PAdvertisement>

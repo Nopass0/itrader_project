@@ -225,7 +225,7 @@ For urgent matters, please contact support.`;
    * Adjust prices for account based on market
    */
   private async adjustPricesForAccount(accountId: string): Promise<void> {
-    const myAds = await this.manager.getMyAdvertisements(1, 100, accountId);
+    const myAds = await this.manager.getMyAdvertisements(accountId);
     
     for (const ad of myAds.list) {
       if (ad.status !== 'ONLINE') continue;
@@ -285,7 +285,7 @@ For urgent matters, please contact support.`;
         console.warn(`[${account.id}] Too many pending orders: ${pendingOrders.total}`);
         
         // Pause advertisements
-        const myAds = await this.manager.getMyAdvertisements(1, 100, account.id);
+        const myAds = await this.manager.getMyAdvertisements(account.id);
         for (const ad of myAds.list) {
           if (ad.status === 'ONLINE') {
             await this.manager.updateAdvertisement(

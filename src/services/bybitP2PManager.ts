@@ -118,6 +118,15 @@ export class BybitP2PManagerService {
   getManager(): P2PManager {
     return this.manager;
   }
+  
+  /**
+   * Ensure service is initialized
+   */
+  private async ensureInitialized(): Promise<void> {
+    if (!this.initialized) {
+      await this.initialize();
+    }
+  }
 
   /**
    * Payment type ID mappings based on Bybit's system
@@ -162,6 +171,9 @@ export class BybitP2PManagerService {
     }
 
     try {
+      // Ensure service is initialized
+      await this.ensureInitialized();
+      
       // Fetch payment methods from API
       const paymentMethods = await this.manager.getPaymentMethods(accountId);
       
@@ -310,6 +322,9 @@ export class BybitP2PManagerService {
     currency: string,
     paymentMethod: "SBP" | "Tinkoff",
   ): Promise<{ advertisementId: string; bybitAccountId: string }> {
+    // Ensure service is initialized
+    await this.ensureInitialized();
+    
     // Get all active accounts
     const accounts = await db.getActiveBybitAccounts();
     if (accounts.length === 0) {
@@ -347,11 +362,17 @@ export class BybitP2PManagerService {
         .map(s => `${s.accountId}: ${s.total} ads (DB: ${s.dbAds}, Bybit: ${s.bybitAds})`)
         .join(', ');
       
-      throw new Error(
-        `All ${accounts.length} Bybit accounts have maximum ads (2 each). ` +
+      console.log(
+        `[BybitP2PManager] All ${accounts.length} Bybit accounts have maximum ads (2 each). ` +
         `Account status: ${statusReport}. ` +
-        `Please wait for some ads to complete or add more accounts.`
+        `Waiting for some ads to complete...`
       );
+      
+      // Return a special response indicating we're waiting
+      return {
+        advertisementId: "WAITING",
+        bybitAccountId: "WAITING"
+      };
     }
     
     const account = selectedAccount;
@@ -399,25 +420,39 @@ export class BybitP2PManagerService {
 
     // Get exchange rate from the exchange rate manager
     const exchangeRateManager = getExchangeRateManager();
-    const exchangeRate = exchangeRateManager.getRate();
+    let basePrice = exchangeRateManager.getRate();
     
-    // Check for price conflicts with existing ads (must be >5% difference)
-    if (existingAds.length > 0) {
-      for (const existingAd of existingAds) {
-        const existingPrice = parseFloat(existingAd.price);
-        const priceDifference = Math.abs(exchangeRate - existingPrice) / existingPrice * 100;
-        
-        if (priceDifference < 5) {
-          throw new Error(
-            `Cannot create advertisement: price ${exchangeRate} is within 5% of existing ad price ${existingPrice}. ` +
-            `Difference: ${priceDifference.toFixed(2)}%. Please adjust the exchange rate or delete existing ads.`
-          );
-        }
-      }
+    // Ensure basePrice is valid (must be positive)
+    if (isNaN(basePrice) || basePrice <= 0) {
+      console.warn(`[BybitP2PManager] Invalid base price: ${basePrice}, using default 85.00`);
+      basePrice = 85.00; // Use a reasonable default
+    }
+    
+    // Use the base price directly without any conflict checking
+    let finalPrice = basePrice;
+    
+    console.log(`[BybitP2PManager] Using price: ${finalPrice.toFixed(2)}`);
+    
+    // Update exchange rate to use the final adjusted price
+    const exchangeRate = finalPrice;
+    
+    // Validate exchange rate before calculation
+    if (isNaN(exchangeRate) || exchangeRate <= 0) {
+      throw new Error(`Invalid exchange rate: ${exchangeRate}. Cannot create advertisement.`);
     }
     
     // Calculate USDT quantity: (amount in RUB / exchange rate) + 5 USDT
-    const usdtQuantity = ((parseFloat(amount) / exchangeRate) + 5).toFixed(2);
+    const parsedAmount = parseFloat(amount);
+    if (isNaN(parsedAmount) || parsedAmount <= 0) {
+      throw new Error(`Invalid amount: ${amount}. Cannot create advertisement.`);
+    }
+    
+    const usdtQuantity = ((parsedAmount / exchangeRate) + 5).toFixed(2);
+    
+    // Validate the calculated quantity
+    if (isNaN(parseFloat(usdtQuantity)) || parseFloat(usdtQuantity) <= 0) {
+      throw new Error(`Invalid USDT quantity calculated: ${usdtQuantity}. Amount: ${amount}, Rate: ${exchangeRate}`);
+    }
     
     // Store advertisement parameters since response won't include them
     const adParams = {
@@ -431,7 +466,7 @@ export class BybitP2PManagerService {
       maxAmount: amount,
       quantity: usdtQuantity,
       paymentIds: [paymentMethodId],
-      remark: "Fast trade, instant release",
+      remark: "✅ОПЛАЧИВАЮ ТОЛЬКО НА АЛЬФА БАНК, Т-БАНК, СБЕРАБАНК, ВТБ НОМЕР ТЕЛЕФОНА СКИДЫВАЕТЕ В ЧАТ, заходя в ордер вы соглашаетесь с моими условиями.✅ ✅ОПЛАЧИВАЮ В 3-5 ПЛАТЕЖЕЙ✅ ✅У вас должен быть доступ к лк, ЧЕКИ НЕ ПРЕДОСТАВЛЯЮ!✅ ✅После оплаты вы обязаны проверить поступления лично✅ ❌Треугольщики мимо‼️‼️❌ ✅С Реквизитами отправляем фио в чат✅ ✅после получения средств обязательно СКРИН С ИСТОРИИ ОПЕРАЦИЙ✅ ПОСЛЕ ПОЛУЧЕНИЯ СРЕДСТВ, СКРИНЫ!!! Заходите в сделку, если не торопитесь, оплачиваю в течении 10-40 минут. Нажимаю \"оплачено\" сразу, чтобы не истекло время сделки, так как не всегда получается быстро оплатить!",
       paymentPeriod: "15", // 15 minutes payment time as string
       itemType: "ORIGIN",
       tradingPreferenceSet: {} // Required empty object
@@ -573,9 +608,25 @@ export class BybitP2PManagerService {
    */
   async getActiveAdCountFromBybit(accountId: string): Promise<number> {
     try {
-      const myAds = await this.manager.getMyAdvertisements(1, 50, accountId);
-      // Count only ONLINE ads
-      const activeAds = myAds.list.filter(ad => ad.status === 'ONLINE');
+      // Ensure service is initialized
+      await this.ensureInitialized();
+      
+      const myAds = await this.manager.getMyAdvertisements(accountId);
+      
+      // Check if response is valid
+      if (!myAds || typeof myAds !== 'object') {
+        console.warn(`[BybitP2PManager] Invalid response from getMyAdvertisements:`, myAds);
+        return 0;
+      }
+      
+      // Check if list property exists and is an array
+      if (!myAds.list || !Array.isArray(myAds.list)) {
+        console.warn(`[BybitP2PManager] No advertisement list in response:`, myAds);
+        return 0;
+      }
+      
+      // Count only ONLINE ads (status 10 = ONLINE, 20 = OFFLINE, 30 = COMPLETED)
+      const activeAds = myAds.list.filter(ad => ad && (ad.status === 'ONLINE' || ad.status === 10));
       return activeAds.length;
     } catch (error) {
       console.error(`[BybitP2PManager] Failed to get ad count from Bybit:`, error);

@@ -451,16 +451,24 @@ async function main() {
                   paymentMethod,
                 );
 
-              // Create transaction
-              await context.db.createTransaction({
-                payoutId: payout.id,
-                advertisementId,
-                status: "pending",
-              });
+              // Check if we're waiting for accounts to free up
+              if (advertisementId === "WAITING" && bybitAccountId === "WAITING") {
+                console.log(
+                  `[AdCreator] All accounts are full. Waiting for free slots for payout ${payout.gatePayoutId}...`,
+                );
+                // Don't create a transaction yet, will retry on next iteration
+              } else {
+                // Create transaction
+                await context.db.createTransaction({
+                  payoutId: payout.id,
+                  advertisementId,
+                  status: "pending",
+                });
 
-              console.log(
-                `[AdCreator] ✓ Created ad ${advertisementId} on account ${bybitAccountId} for payout ${payout.gatePayoutId}`,
-              );
+                console.log(
+                  `[AdCreator] ✓ Created ad ${advertisementId} on account ${bybitAccountId} for payout ${payout.gatePayoutId}`,
+                );
+              }
             } else {
               console.log(
                 `[AdCreator] User declined to create ad for payout ${payout.gatePayoutId}`,

@@ -242,13 +242,12 @@ export class P2PManager extends EventEmitter {
 
   /**
    * Get my advertisements
+   * Note: This endpoint doesn't support pagination parameters
    */
   async getMyAdvertisements(
-    page: number = 1,
-    pageSize: number = 20,
     accountId?: string
   ): Promise<PaginatedResponse<P2PAdvertisement>> {
-    return await this.getClient(accountId).getMyAdvertisements(page, pageSize);
+    return await this.getClient(accountId).getMyAdvertisements();
   }
   
   /**

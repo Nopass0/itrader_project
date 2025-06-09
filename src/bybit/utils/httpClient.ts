@@ -114,6 +114,10 @@ export class HttpClient {
   private handleResponse<T>(response: AxiosResponse<ApiResponse<T>>): ApiResponse<T> {
     const data = response.data;
     
+    if (this.config.debugMode) {
+      console.log('[HTTPClient] Raw response data:', JSON.stringify(data, null, 2));
+    }
+    
     // Bybit uses both retCode and ret_code
     const retCode = data.retCode ?? data.ret_code;
     const retMsg = data.retMsg ?? data.ret_msg;
@@ -130,6 +134,12 @@ export class HttpClient {
         result: data.result,
         time: data.time_now
       } as ApiResponse<T>;
+    }
+    
+    // Ensure we always have a valid response structure
+    if (!data.hasOwnProperty('result')) {
+      console.warn('[HTTPClient] Response missing result property:', data);
+      // Return the data as-is but log warning
     }
     
     return data;
