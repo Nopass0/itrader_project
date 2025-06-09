@@ -23,6 +23,7 @@ export class HttpClient {
       headers: {
         'Content-Type': 'application/json',
         'X-BAPI-API-KEY': config.apiKey,
+        'X-BAPI-SIGN-TYPE': 2,
       },
     });
 
@@ -68,7 +69,9 @@ export class HttpClient {
     if (!config.headers) {
       config.headers = {};
     }
-    
+
+    config.headers['X-BAPI-API-KEY'] = this.config.apiKey;
+    config.headers['X-BAPI-SIGN-TYPE'] = 2;
     config.headers['X-BAPI-TIMESTAMP'] = timestamp;
     config.headers['X-BAPI-RECV-WINDOW'] = recvWindow;
     config.headers['X-BAPI-SIGN'] = signature;

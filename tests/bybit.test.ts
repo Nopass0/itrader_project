@@ -14,61 +14,65 @@ class MockHttpClient {
   }
 }
 
-class MockAccountManager {
-  constructor(private httpClient: MockHttpClient) {}
-  getHttpClient() { return this.httpClient; }
-  getAccount() { return { isTestnet: false }; }
-}
 
 describe('P2PClient endpoints', () => {
   const http = new MockHttpClient();
-  const am = new MockAccountManager(http) as any;
-  const p2p = new P2PClient(am);
-
-  it('balance endpoint', async () => {
-    await p2p.getAllBalances('acc');
-    const log = http.logs.pop();
-    expect(log.endpoint).toBe('/v5/asset/transfer/query-account-coins-balance');
-  });
+  const p2p = new P2PClient({ apiKey: 'k', apiSecret: 's', testnet: true });
+  // replace internal http client with mock
+  (p2p as any).httpClient = {
+    get: async (endpoint: string, params?: any) => http.request('GET', endpoint, params),
+    post: async (endpoint: string, data?: any) => http.request('POST', endpoint, data),
+    delete: async (endpoint: string, data?: any) => http.request('DELETE', endpoint, data),
+  };
 
   it('account info endpoint', async () => {
-    await p2p.getUserInfo('acc');
+    await p2p.getAccountInfo();
     const log = http.logs.pop();
     expect(log.endpoint).toBe('/v5/p2p/user/personal/info');
   });
 
   it('ads endpoint', async () => {
-    await p2p.searchAds('acc', { tokenId: 'USDT', currencyId: 'RUB', side: '1' });
+    await p2p.getActiveAdvertisements({ asset: 'USDT', fiatCurrency: 'RUB', side: 'BUY' });
     const log = http.logs.pop();
     expect(log.endpoint).toBe('/v5/p2p/item/online');
   });
 
   it('payment methods endpoint', async () => {
-    await p2p.getUserPaymentMethods('acc');
+    await p2p.getPaymentMethods();
     const log = http.logs.pop();
     expect(log.endpoint).toBe('/v5/p2p/user/payment/list');
   });
 
   it('order list endpoint', async () => {
-    await p2p.getOrders('acc');
+    await p2p.getOrders();
     const log = http.logs.pop();
     expect(log.endpoint).toBe('/v5/p2p/order/simplifyList');
   });
 
   it('create ad endpoint', async () => {
-    await p2p.createAd('acc', { tokenId:'USDT', currencyId:'RUB', side:'1', priceType:'0', price:'1', minAmount:'10', maxAmount:'10', remark:'', tradingPreferenceSet:{}, paymentIds:['1'], quantity:'1', paymentPeriod:'15', itemType:'ORIGIN'});
+    await p2p.createAdvertisement({
+      side: 'BUY',
+      asset: 'USDT',
+      fiatCurrency: 'RUB',
+      priceType: 'FIXED',
+      price: '1',
+      quantity: '1',
+      minOrderAmount: '10',
+      maxOrderAmount: '10',
+      paymentIds: ['1'],
+    });
     const log = http.logs.pop();
     expect(log.endpoint).toBe('/v5/p2p/item/create');
   });
 
   it('chat message endpoint', async () => {
-    await p2p.sendChatMessage('acc', '123', 'hi', 'str', 'uuid');
+    await p2p.sendChatMessage({ orderId: '123', message: 'hi' });
     const log = http.logs.pop();
     expect(log.endpoint).toBe('/v5/p2p/order/message/send');
   });
 
   it('chat list endpoint', async () => {
-    await p2p.getChatMessages('acc', '123');
+    await p2p.getChatMessages('123');
     const log = http.logs.pop();
     expect(log.endpoint).toBe('/v5/p2p/order/message/listpage');
   });

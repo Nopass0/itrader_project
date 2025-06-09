@@ -87,6 +87,20 @@ export class GmailClient {
   }
 
   /**
+   * Возвращает профиль пользователя Gmail
+   */
+  async getUserProfile(): Promise<gmail_v1.Schema$Profile> {
+    await this.refreshTokensIfNeeded();
+    try {
+      const response = await this.gmail.users.getProfile({ userId: "me" });
+      return response.data;
+    } catch (error: unknown) {
+      this.handleApiError(error);
+      throw error;
+    }
+  }
+
+  /**
    * Обновляет токены если они истекли
    * @returns Обновленные токены или текущие
    */
