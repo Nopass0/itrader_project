@@ -691,16 +691,33 @@ async function main() {
                   console.log(`      📨 Found ${messages.length} chat messages`);
                   
                   // Check who sent messages
-                  const ourMessages = messages.filter((msg: any) => msg.userId === order.userId);
+                  // System messages have msgType=0 or contain specific patterns
+                  const systemMessages = messages.filter((msg: any) => 
+                    msg.msgType === 0 || 
+                    msg.message?.includes("Be careful not to be fooled") ||
+                    msg.message?.includes("A buyer has submitted an order") ||
+                    msg.message?.includes("‼️ЧИТАЕМ‼️")
+                  );
+                  
+                  // Our messages are from our userId but NOT system messages
+                  const ourMessages = messages.filter((msg: any) => 
+                    msg.userId === order.userId && 
+                    msg.msgType !== 0 &&
+                    !msg.message?.includes("Be careful not to be fooled") &&
+                    !msg.message?.includes("A buyer has submitted an order") &&
+                    !msg.message?.includes("‼️ЧИТАЕМ‼️")
+                  );
+                  
+                  // Their messages are from different userId
                   const theirMessages = messages.filter((msg: any) => msg.userId !== order.userId);
                   
-                  console.log(`      📊 Our: ${ourMessages.length}, Their: ${theirMessages.length}`);
+                  console.log(`      📊 System: ${systemMessages.length}, Our: ${ourMessages.length}, Their: ${theirMessages.length}`);
                   
                   // Debug: show message details
                   if (messages.length > 0) {
                     console.log(`      🔍 Order userId: ${order.userId}`);
                     messages.slice(0, 3).forEach((msg: any, idx: number) => {
-                      console.log(`      Message ${idx + 1}: userId=${msg.userId}, nickName=${msg.nickName}, text="${msg.message?.substring(0, 50)}..."`);
+                      console.log(`      Message ${idx + 1}: userId=${msg.userId}, msgType=${msg.msgType}, nickName=${msg.nickName}, text="${msg.message?.substring(0, 50)}..."`);
                     });
                   }
                   
@@ -875,8 +892,14 @@ async function main() {
                     messages = chatResponse.result;
                   }
                   
-                  // Check if we sent any messages
-                  const ourMessages = messages.filter((msg: any) => msg.userId === order.userId);
+                  // Check if we sent any messages (excluding system messages)
+                  const ourMessages = messages.filter((msg: any) => 
+                    msg.userId === order.userId && 
+                    msg.msgType !== 0 &&
+                    !msg.message?.includes("Be careful not to be fooled") &&
+                    !msg.message?.includes("A buyer has submitted an order") &&
+                    !msg.message?.includes("‼️ЧИТАЕМ‼️")
+                  );
                   
                   // Also check database for sent messages
                   let existingTransaction = await context.db.getTransactionByOrderId(order.id);
