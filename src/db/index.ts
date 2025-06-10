@@ -1,14 +1,14 @@
-import { 
-  PrismaClient, 
+import {
+  PrismaClient,
   type Payout,
-  type BybitAdvertisement,
+  type Advertisement,
   type Transaction,
   type ChatMessage,
   type GateAccount,
   type BybitAccount,
   type GmailAccount,
   type BlacklistedTransaction,
-  type SystemSettings
+  type Settings,
 } from "../../generated/prisma";
 
 interface GatePayoutData {
@@ -35,7 +35,7 @@ interface GatePayoutData {
 }
 
 class DatabaseClient {
-  private prisma: PrismaClient;
+  public prisma: PrismaClient;
   private maxRetries = 3;
   private retryDelay = 1000;
 
@@ -101,13 +101,16 @@ class DatabaseClient {
   ): Promise<Payout> {
     return await this.executeWithRetry(async () => {
       // Handle empty amount arrays for pending transactions
-      const amountTrader = Array.isArray(gatePayoutData.amount) && gatePayoutData.amount.length === 0 
-        ? {} 
-        : (gatePayoutData.amount?.trader || {});
-      
-      const totalTrader = Array.isArray(gatePayoutData.total) && gatePayoutData.total.length === 0 
-        ? {} 
-        : (gatePayoutData.total?.trader || {});
+      const amountTrader =
+        Array.isArray(gatePayoutData.amount) &&
+        gatePayoutData.amount.length === 0
+          ? {}
+          : gatePayoutData.amount?.trader || {};
+
+      const totalTrader =
+        Array.isArray(gatePayoutData.total) && gatePayoutData.total.length === 0
+          ? {}
+          : gatePayoutData.total?.trader || {};
 
       return await this.prisma.payout.upsert({
         where: { gatePayoutId: gatePayoutData.id },
@@ -117,8 +120,12 @@ class DatabaseClient {
           amountTrader,
           totalTrader,
           status: gatePayoutData.status,
-          approvedAt: gatePayoutData.approved_at ? new Date(gatePayoutData.approved_at) : null,
-          expiredAt: gatePayoutData.expired_at ? new Date(gatePayoutData.expired_at) : null,
+          approvedAt: gatePayoutData.approved_at
+            ? new Date(gatePayoutData.approved_at)
+            : null,
+          expiredAt: gatePayoutData.expired_at
+            ? new Date(gatePayoutData.expired_at)
+            : null,
           updatedAt: new Date(gatePayoutData.updated_at),
           meta: gatePayoutData.meta,
           method: gatePayoutData.method,
@@ -135,8 +142,12 @@ class DatabaseClient {
           amountTrader,
           totalTrader,
           status: gatePayoutData.status,
-          approvedAt: gatePayoutData.approved_at ? new Date(gatePayoutData.approved_at) : null,
-          expiredAt: gatePayoutData.expired_at ? new Date(gatePayoutData.expired_at) : null,
+          approvedAt: gatePayoutData.approved_at
+            ? new Date(gatePayoutData.approved_at)
+            : null,
+          expiredAt: gatePayoutData.expired_at
+            ? new Date(gatePayoutData.expired_at)
+            : null,
           createdAt: new Date(gatePayoutData.created_at),
           updatedAt: new Date(gatePayoutData.updated_at),
           meta: gatePayoutData.meta,
@@ -163,9 +174,9 @@ class DatabaseClient {
   async getPayoutsWithoutTransaction(status: number): Promise<Payout[]> {
     return await this.executeWithRetry(async () => {
       return await this.prisma.payout.findMany({
-        where: { 
+        where: {
           status,
-          transaction: null
+          transaction: null,
         },
         orderBy: { createdAt: "asc" },
       });
@@ -175,31 +186,71 @@ class DatabaseClient {
   // ========== Advertisement Methods ==========
 
   async createAdvertisement(data: {
-    bybitAdId: string;
+    bybitAdId?: string;
     bybitAccountId: string;
-    side: string;
-    asset: string;
-    fiatCurrency: string;
-    price: string;
-    quantity: string;
-    minOrderAmount: string;
-    maxOrderAmount: string;
-    paymentMethod: string;
-    status: string;
-  }): Promise<BybitAdvertisement> {
+    type?: string;
+    currency?: string;
+    fiat?: string;
+    price?: number;
+    minAmount?: number;
+    maxAmount?: number;
+    paymentMethods?: string[];
+    // Legacy fields
+    side?: string;
+    asset?: string;
+    fiatCurrency?: string;
+    quantity?: string;
+    minOrderAmount?: string;
+    maxOrderAmount?: string;
+    paymentMethod?: string;
+    status?: string;
+  }): Promise<Advertisement> {
     return await this.executeWithRetry(async () => {
-      return await this.prisma.bybitAdvertisement.create({
-        data,
+      // Convert legacy fields to new format if needed
+      const createData: any = { ...data };
+      
+      if (data.side && !data.type) {
+        createData.type = data.side.toLowerCase() === 'sell' ? 'sell' : 'buy';
+      }
+      
+      if (data.asset && !data.currency) {
+        createData.currency = data.asset;
+      }
+      
+      if (data.fiatCurrency && !data.fiat) {
+        createData.fiat = data.fiatCurrency;
+      }
+      
+      if (data.price && typeof data.price === 'string') {
+        createData.price = parseFloat(data.price);
+      }
+      
+      if (data.minOrderAmount && !data.minAmount) {
+        createData.minAmount = parseFloat(data.minOrderAmount);
+      }
+      
+      if (data.maxOrderAmount && !data.maxAmount) {
+        createData.maxAmount = parseFloat(data.maxOrderAmount);
+      }
+      
+      if (data.paymentMethod && !data.paymentMethods) {
+        createData.paymentMethods = JSON.stringify([data.paymentMethod]);
+      } else if (data.paymentMethods && Array.isArray(data.paymentMethods)) {
+        createData.paymentMethods = JSON.stringify(data.paymentMethods);
+      }
+      
+      return await this.prisma.advertisement.create({
+        data: createData,
       });
     }, "Create advertisement");
   }
 
   async updateAdvertisement(
     id: string,
-    data: Partial<BybitAdvertisement>,
-  ): Promise<BybitAdvertisement> {
+    data: Partial<Advertisement>,
+  ): Promise<Advertisement> {
     return await this.executeWithRetry(async () => {
-      return await this.prisma.bybitAdvertisement.update({
+      return await this.prisma.advertisement.update({
         where: { id },
         data,
       });
@@ -208,12 +259,12 @@ class DatabaseClient {
 
   async getActiveAdvertisementsByAccount(
     bybitAccountId: string,
-  ): Promise<BybitAdvertisement[]> {
+  ): Promise<Advertisement[]> {
     return await this.executeWithRetry(async () => {
-      return await this.prisma.bybitAdvertisement.findMany({
+      return await this.prisma.advertisement.findMany({
         where: {
           bybitAccountId,
-          status: "ONLINE",
+          isActive: true,
         },
       });
     }, "Get active advertisements by account");
@@ -223,13 +274,23 @@ class DatabaseClient {
     bybitAccountId: string,
   ): Promise<number> {
     return await this.executeWithRetry(async () => {
-      return await this.prisma.bybitAdvertisement.count({
+      return await this.prisma.advertisement.count({
         where: {
           bybitAccountId,
-          status: "ONLINE",
+          isActive: true,
         },
       });
     }, "Count active advertisements");
+  }
+
+  async getAdvertisements(): Promise<Advertisement[]> {
+    return await this.executeWithRetry(async () => {
+      return await this.prisma.advertisement.findMany({
+        where: {
+          isActive: true,
+        },
+      });
+    }, "Get all active advertisements");
   }
 
   // ========== Transaction Methods ==========
@@ -281,7 +342,11 @@ class DatabaseClient {
         where: { id },
         include: {
           payout: true,
-          advertisement: true,
+          advertisement: {
+            include: {
+              bybitAccount: true,
+            },
+          },
           chatMessages: {
             orderBy: { createdAt: "asc" },
           },
@@ -304,7 +369,7 @@ class DatabaseClient {
 
   async getSuccessfulTransactionsForRelease(): Promise<Transaction[]> {
     const twoMinutesAgo = new Date(Date.now() - 2 * 60 * 1000);
-    
+
     return await this.executeWithRetry(async () => {
       return await this.prisma.transaction.findMany({
         where: {
@@ -325,14 +390,21 @@ class DatabaseClient {
 
   async createChatMessage(data: {
     transactionId: string;
-    messageId: string;
+    messageId?: string;
     sender: string;
     content: string;
     messageType: string;
+    sentAt?: Date;
+    isProcessed?: boolean;
   }): Promise<ChatMessage> {
     return await this.executeWithRetry(async () => {
+      const { content, ...rest } = data;
       return await this.prisma.chatMessage.create({
-        data,
+        data: {
+          ...rest,
+          message: content,
+          content: content,
+        },
       });
     }, "Create chat message");
   }
@@ -344,6 +416,14 @@ class DatabaseClient {
         data: { isProcessed: true },
       });
     }, "Mark chat message processed");
+  }
+
+  async getChatMessageByMessageId(messageId: string): Promise<ChatMessage | null> {
+    return await this.executeWithRetry(async () => {
+      return await this.prisma.chatMessage.findFirst({
+        where: { messageId },
+      });
+    }, "Get chat message by message ID");
   }
 
   async getUnprocessedChatMessages(): Promise<ChatMessage[]> {
@@ -513,9 +593,9 @@ class DatabaseClient {
 
   // ========== Settings Methods ==========
 
-  async setSetting(key: string, value: string): Promise<SystemSettings> {
+  async setSetting(key: string, value: string): Promise<Settings> {
     return await this.executeWithRetry(async () => {
-      return await this.prisma.systemSettings.upsert({
+      return await this.prisma.settings.upsert({
         where: { key },
         update: { value },
         create: { key, value },
@@ -525,7 +605,7 @@ class DatabaseClient {
 
   async getSetting(key: string): Promise<string | null> {
     return await this.executeWithRetry(async () => {
-      const setting = await this.prisma.systemSettings.findUnique({
+      const setting = await this.prisma.settings.findUnique({
         where: { key },
       });
       return setting?.value || null;
@@ -537,22 +617,44 @@ class DatabaseClient {
     return mode === "manual";
   }
 
+  async getCurrentExchangeRate(): Promise<number> {
+    const mode = await this.getSetting("exchangeRateMode");
+    
+    if (mode === "constant") {
+      const constantRate = await this.getSetting("constantExchangeRate");
+      return constantRate ? parseFloat(constantRate) : 100.0;
+    }
+    
+    // For automatic mode, get from latest history or default
+    const latestRate = await this.prisma.exchangeRateHistory.findFirst({
+      orderBy: { timestamp: 'desc' }
+    });
+    
+    if (latestRate) {
+      const markup = await this.getSetting("exchangeRateMarkup");
+      const markupValue = markup ? parseFloat(markup) : 2.5;
+      return latestRate.rate * (1 + markupValue / 100);
+    }
+    
+    return 100.0; // Default rate
+  }
+
   async getStuckTransactions(minutesThreshold: number = 30) {
     return await this.executeWithRetry(async () => {
       const threshold = new Date(Date.now() - minutesThreshold * 60 * 1000);
       return await this.prisma.transaction.findMany({
         where: {
           status: {
-            in: ['pending', 'chat_started', 'waiting_payment']
+            in: ["pending", "chat_started", "waiting_payment"],
           },
           updatedAt: {
-            lt: threshold
-          }
+            lt: threshold,
+          },
         },
         include: {
           payout: true,
-          advertisement: true
-        }
+          advertisement: true,
+        },
       });
     }, "Get stuck transactions");
   }
@@ -563,8 +665,8 @@ class DatabaseClient {
         where: { id },
         data: {
           ...data,
-          updatedAt: new Date()
-        }
+          updatedAt: new Date(),
+        },
       });
     }, "Update transaction");
   }
@@ -575,15 +677,15 @@ class DatabaseClient {
 }
 
 export const db = new DatabaseClient();
-export type { 
-  Payout, 
+export type {
+  Payout,
   GatePayoutData,
-  BybitAdvertisement,
+  Advertisement,
   Transaction,
   ChatMessage,
   GateAccount,
   BybitAccount,
   GmailAccount,
   BlacklistedTransaction,
-  SystemSettings
+  Settings,
 };

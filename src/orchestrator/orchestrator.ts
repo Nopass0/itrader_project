@@ -11,7 +11,7 @@ import { StateManager } from "./stateManager";
 
 export class Orchestrator<T = any> extends EventEmitter {
   private name: string;
-  private context: T;
+  public context: T;
   private scheduler: TaskScheduler<T>;
   private stateManager: StateManager<T>;
   private isPaused: boolean = false;

@@ -1,9 +1,3 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
-// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
-
 generator client {
   provider = "prisma-client-js"
   output   = "../generated/prisma"
@@ -15,118 +9,145 @@ datasource db {
 }
 
 model Payout {
-  id              String    @id @default(cuid())
-  gatePayoutId    Int       @unique
-  paymentMethodId Int
-  wallet          String
-  amountTrader    Json // {"643": 40320, "000001": 502.56}
-  totalTrader     Json // {"643": 41207.04, "000001": 513.61}
-  status          Int // 5 = expired, etc
+  id              String       @id @default(cuid())
+  gatePayoutId    Int?         @unique
+  paymentMethodId Int?
+  wallet          String?
+  amountTrader    Json?
+  totalTrader     Json?
+  status          Int
   approvedAt      DateTime?
   expiredAt       DateTime?
-  createdAt       DateTime
-  updatedAt       DateTime
-  meta            Json // courses, reason
-  method          Json // payment method details
-  attachments     Json // array of attachments
-  tooltip         Json // payments success/rejected info
-  bank            Json // bank details
-  trader          Json // trader info
-  gateAccount     String // account identifier
-
-  // Relations
-  transaction Transaction?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+  meta            Json?
+  method          Json?
+  attachments     Json?
+  tooltip         Json?
+  bank            Json?
+  trader          Json?
+  gateAccount     String?
+  gateAccountId   String?
+  amount          Float?
+  recipientCard   String?
+  recipientName   String?
+  description     String?
+  failureReason   String?
+  completedAt     DateTime?
+  transactionId   String?      @unique
+  transaction     Transaction? @relation(fields: [transactionId], references: [id])
+  gateAccountRef  GateAccount? @relation("GateAccountToPayouts", fields: [gateAccountId], references: [id])
 
   @@index([status])
   @@index([gateAccount])
+  @@index([gateAccountId])
   @@index([gatePayoutId])
 }
 
-model BybitAdvertisement {
-  id             String   @id @default(cuid())
-  bybitAdId      String   @unique
-  bybitAccountId String
-  side           String // BUY or SELL
-  asset          String
-  fiatCurrency   String
-  price          String
-  quantity       String
-  minOrderAmount String
-  maxOrderAmount String
-  paymentMethod  String // SBP or Tinkoff
-  status         String // ONLINE, OFFLINE, DELETED
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
-
-  // Relations
-  transaction Transaction?
+model Advertisement {
+  id               String        @id @default(cuid())
+  bybitAdId        String?       @unique
+  bybitAccountId   String
+  type             String
+  currency         String
+  fiat             String
+  price            Float
+  minAmount        Float
+  maxAmount        Float
+  paymentMethods   Json
+  description      String?
+  autoReply        Boolean       @default(false)
+  autoReplyMessage String?
+  isActive         Boolean       @default(true)
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+  side             String?
+  asset            String?
+  fiatCurrency     String?
+  quantity         String?
+  minOrderAmount   String?
+  maxOrderAmount   String?
+  paymentMethod    String?
+  status           String?
+  bybitAccount     BybitAccount  @relation(fields: [bybitAccountId], references: [id])
+  transactions     Transaction[]
 
   @@index([bybitAccountId])
-  @@index([status])
+  @@index([isActive])
+  @@index([type])
 }
 
 model Transaction {
-  id              String    @id @default(cuid())
-  payoutId        String    @unique
-  advertisementId String    @unique
-  orderId         String? // Bybit order ID when someone accepts the ad
-  status          String // pending, chat_started, waiting_payment, payment_received, completed, failed, blacklisted
-  chatStep        Int       @default(0) // Current step in chat automation
-  paymentSentAt   DateTime? // When we sent payment details
-  checkReceivedAt DateTime? // When we received the check
-  completedAt     DateTime? // When transaction was completed
-  failureReason   String?
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
-
-  // Relations
-  payout        Payout             @relation(fields: [payoutId], references: [id])
-  advertisement BybitAdvertisement @relation(fields: [advertisementId], references: [id])
-  chatMessages  ChatMessage[]
+  id               String        @id @default(cuid())
+  payoutId         String?       @unique
+  advertisementId  String
+  orderId          String?
+  amount           Float         @default(0)
+  counterpartyName String?
+  status           String
+  chatStep         Int           @default(0)
+  paymentSentAt    DateTime?
+  checkReceivedAt  DateTime?
+  completedAt      DateTime?
+  failureReason    String?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+  chatMessages     ChatMessage[]
+  payout           Payout?
+  advertisement    Advertisement @relation(fields: [advertisementId], references: [id])
 
   @@index([status])
+  @@index([orderId])
 }
 
 model ChatMessage {
-  id            String   @id @default(cuid())
+  id            String      @id @default(cuid())
   transactionId String
-  messageId     String // Bybit message ID
-  sender        String // us or counterparty
-  content       String
-  messageType   String // TEXT, IMAGE, FILE
-  isProcessed   Boolean  @default(false)
-  createdAt     DateTime @default(now())
-
-  // Relations
-  transaction Transaction @relation(fields: [transactionId], references: [id])
+  messageId     String?
+  sender        String
+  message       String
+  messageType   String      @default("TEXT")
+  isAutoReply   Boolean     @default(false)
+  isProcessed   Boolean     @default(false)
+  readAt        DateTime?
+  sentAt        DateTime?
+  metadata      String?
+  createdAt     DateTime    @default(now())
+  content       String?
+  transaction   Transaction @relation(fields: [transactionId], references: [id])
 
   @@index([transactionId])
   @@index([isProcessed])
+  @@index([sender])
 }
 
 model GateAccount {
-  id        String    @id @default(cuid())
-  accountId String    @unique
-  email     String
-  password  String?   @default("") //raw password
-  apiKey    String
-  apiSecret String
-  isActive  Boolean   @default(true)
-  lastSync  DateTime?
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
+  id          String    @id @default(cuid())
+  accountId   String    @unique
+  accountName String?
+  email       String
+  password    String?   @default("")
+  apiKey      String
+  apiSecret   String
+  isActive    Boolean   @default(true)
+  lastSync    DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  payouts     Payout[]  @relation("GateAccountToPayouts")
 }
 
 model BybitAccount {
-  id             String    @id @default(cuid())
-  accountId      String    @unique
+  id             String          @id @default(cuid())
+  accountId      String          @unique
+  accountName    String?
   apiKey         String
   apiSecret      String
-  isActive       Boolean   @default(true)
-  activeAdsCount Int       @default(0)
+  isActive       Boolean         @default(true)
+  activeAdsCount Int             @default(0)
   lastSync       DateTime?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  advertisements Advertisement[]
 }
 
 model GmailAccount {
@@ -150,7 +171,7 @@ model BlacklistedTransaction {
   @@index([wallet])
 }
 
-model SystemSettings {
+model Settings {
   id        String   @id @default(cuid())
   key       String   @unique
   value     String
@@ -162,6 +183,110 @@ model ProcessedEmail {
   id          String   @id @default(cuid())
   emailId     String   @unique
   processedAt DateTime @default(now())
-  
+
   @@index([processedAt])
+}
+
+model SystemAccount {
+  id           String      @id @default(cuid())
+  username     String      @unique
+  passwordHash String
+  role         String      @default("operator")
+  isActive     Boolean     @default(true)
+  lastLogin    DateTime?
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+  authTokens   AuthToken[]
+
+  @@index([username])
+  @@index([role])
+}
+
+model AuthToken {
+  id        String        @id @default(cuid())
+  token     String        @unique
+  accountId String
+  expiresAt DateTime
+  createdAt DateTime      @default(now())
+  account   SystemAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([accountId])
+  @@index([expiresAt])
+}
+
+model CustomStatus {
+  id          String   @id @default(cuid())
+  code        String   @unique
+  name        String
+  description String?
+  color       String?
+  isFinal     Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([code])
+}
+
+model ChatTemplate {
+  id              String          @id @default(cuid())
+  name            String
+  message         String
+  keywords        Json
+  groupId         String?
+  customReactions String?
+  priority        Int             @default(0)
+  metadata        String?
+  isActive        Boolean         @default(true)
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  group           ResponseGroup?  @relation(fields: [groupId], references: [id])
+  usageHistory    TemplateUsage[]
+
+  @@index([groupId])
+  @@index([priority])
+}
+
+model ResponseGroup {
+  id          String         @id @default(cuid())
+  name        String         @unique
+  description String?
+  color       String?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+  templates   ChatTemplate[]
+}
+
+model TemplateUsage {
+  id         String       @id @default(cuid())
+  templateId String
+  context    String?
+  usedAt     DateTime     @default(now())
+  template   ChatTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  @@index([templateId])
+  @@index([usedAt])
+}
+
+model AutomationLog {
+  id        String   @id @default(cuid())
+  level     String
+  module    String
+  message   String
+  metadata  String?
+  createdAt DateTime @default(now())
+
+  @@index([level])
+  @@index([module])
+  @@index([createdAt])
+}
+
+model ExchangeRateHistory {
+  id        String   @id @default(cuid())
+  rate      Float
+  source    String
+  metadata  String?
+  timestamp DateTime @default(now())
+
+  @@index([source])
+  @@index([timestamp])
 }

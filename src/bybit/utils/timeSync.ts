@@ -9,6 +9,16 @@ export class TimeSync {
   private static serverTimeOffset: number = 0;
   private static lastSync: number = 0;
   private static syncInterval: number = 60 * 60 * 1000; // Sync every hour
+  private static isMockMode: boolean = false;
+  
+  /**
+   * Set mock offset for testing
+   */
+  static setMockOffset(offset: number): void {
+    this.isMockMode = true;
+    this.serverTimeOffset = offset;
+    this.lastSync = Date.now();
+  }
 
   /**
    * Get server time from Bybit API

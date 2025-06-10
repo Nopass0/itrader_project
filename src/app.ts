@@ -7,7 +7,9 @@ import { CheckVerificationService } from "./services/checkVerification";
 import { P2POrderProcessor } from "./services/p2pOrderProcessor";
 import { ReceiptProcessorService } from "./services/receiptProcessor";
 import { ActiveOrdersMonitorService } from "./services/activeOrdersMonitor";
+import { InstantOrderMonitorService } from "./services/instantOrderMonitor";
 import { GmailClient, GmailManager } from "./gmail";
+import { WebSocketServer } from "./webserver";
 import inquirer from "inquirer";
 import fs from "fs/promises";
 import path from "path";
@@ -23,10 +25,19 @@ interface AppContext {
   orderProcessor: P2POrderProcessor | null;
   receiptProcessor: ReceiptProcessorService | null;
   activeOrdersMonitor: ActiveOrdersMonitorService | null;
+  instantOrderMonitor: InstantOrderMonitorService | null;
   isManualMode: boolean;
 }
 
 async function promptUser(message: string): Promise<boolean> {
+  // Check environment variable first
+  if (process.env.MODE === "auto") {
+    console.log(
+      `[promptUser] Auto mode (env) - automatically accepting: ${message}`,
+    );
+    return true;
+  }
+
   const mode = await db.getSetting("mode");
   console.log(`[promptUser] Current mode: ${mode}`);
 
@@ -73,7 +84,7 @@ async function main() {
     });
     const bybitManager = new BybitP2PManagerService();
     const chatService = new ChatAutomationService(bybitManager);
-
+    // Don't start instantOrderMonitoring here - it will be started after initialization
     // Sync time with Bybit server on startup
     console.log("Synchronizing time with Bybit server...");
     try {
@@ -90,7 +101,8 @@ async function main() {
     let orderProcessor: any = null;
     let receiptProcessor: any = null;
     let activeOrdersMonitor: any = null;
-    
+    let instantOrderMonitor: any = null;
+
     const checkService = new CheckVerificationService(
       null as any, // Will be set after Gmail initialization
       chatService,
@@ -111,6 +123,7 @@ async function main() {
         orderProcessor,
         receiptProcessor,
         activeOrdersMonitor,
+        instantOrderMonitor,
         isManualMode: false,
       } as AppContext,
     });
@@ -197,12 +210,13 @@ async function main() {
           await client.setTokens({ refresh_token: gmailAccount.refreshToken });
           context.gmailClient = client;
 
-          // Create Gmail manager
+          // Create Gmail manager with credentials
           context.gmailManager = new GmailManager({
-            tokensDir: "./data/gmail-tokens"
+            tokensDir: "./data/gmail-tokens",
+            credentials: credentials,
           });
           await context.gmailManager.initialize();
-          
+
           // Update check service with Gmail client
           (context.checkService as any).gmailClient = client;
 
@@ -213,20 +227,37 @@ async function main() {
             {
               pollingInterval: 10000, // 10 seconds
               maxRetries: 3,
-              retryDelay: 5000
-            }
+              retryDelay: 5000,
+            },
           );
 
           // Initialize active orders monitor
-          context.activeOrdersMonitor = new ActiveOrdersMonitorService(context.bybitManager);
+          context.activeOrdersMonitor = new ActiveOrdersMonitorService(
+            context.bybitManager,
+          );
+          
+          // Start active orders monitoring with 10 second interval
+          await context.activeOrdersMonitor.startMonitoring(10000);
+          console.log("[Init] ActiveOrdersMonitor started with 10s interval");
+
+          // Initialize instant order monitor
+          context.instantOrderMonitor = new InstantOrderMonitorService(
+            context.bybitManager,
+            context.chatService,
+          );
+          // Start instant monitoring
+          await context.instantOrderMonitor.start();
+          console.log("[Init] InstantOrderMonitor started");
 
           // Initialize receipt processor
           // Get first active gate account client
           let gateClient = null;
           if (gateAccounts.length > 0) {
-            gateClient = context.gateAccountManager.getClient(gateAccounts[0].accountId);
+            gateClient = context.gateAccountManager.getClient(
+              gateAccounts[0].accountId,
+            );
           }
-          
+
           if (gateClient) {
             context.receiptProcessor = new ReceiptProcessorService(
               context.gmailManager,
@@ -234,11 +265,13 @@ async function main() {
               context.bybitManager,
               {
                 checkInterval: 30000, // 30 seconds
-                pdfStoragePath: 'data/receipts'
-              }
+                pdfStoragePath: "data/receipts",
+              },
             );
           } else {
-            console.log("[Init] No Gate client available for receipt processor");
+            console.log(
+              "[Init] No Gate client available for receipt processor",
+            );
           }
 
           console.log(`[Init] Added Gmail account ${gmailAccount.email}`);
@@ -509,7 +542,10 @@ async function main() {
                 );
 
               // Check if we're waiting for accounts to free up
-              if (advertisementId === "WAITING" && bybitAccountId === "WAITING") {
+              if (
+                advertisementId === "WAITING" &&
+                bybitAccountId === "WAITING"
+              ) {
                 console.log(
                   `[AdCreator] All accounts are full. Waiting for free slots for payout ${payout.gatePayoutId}...`,
                 );
@@ -542,39 +578,16 @@ async function main() {
       interval: 10 * 1000, // 10 seconds
     });
 
-    // Task 3: Monitor Active P2P Orders
-    orchestrator.addTask({
-      id: "active_orders_monitor",
-      name: "Monitor active P2P orders and handle chats",
-      fn: async (taskContext: any) => {
-        const context = getContext(taskContext);
-        if (!context.activeOrdersMonitor) {
-          return;
-        }
-        
-        try {
-          // Active orders monitor runs its own polling loop
-          if (!context.activeOrdersMonitor.isMonitoring) {
-            await context.activeOrdersMonitor.startMonitoring(10000); // Check every 10 seconds for faster response
-          }
-        } catch (error) {
-          console.error("[ActiveOrdersMonitor] Error:", error);
-        }
-      },
-      runOnStart: true,
-      interval: 60 * 60 * 1000, // Check every hour if still running
-    });
-
     // Task 3.5: Process receipts
     orchestrator.addTask({
-      id: "receipt_processor", 
+      id: "receipt_processor",
       name: "Process email receipts",
       fn: async (taskContext: any) => {
         const context = getContext(taskContext);
         if (!context.receiptProcessor) {
           return;
         }
-        
+
         try {
           // Receipt processor runs its own polling loop
           if (!context.receiptProcessor.isRunning) {
@@ -588,112 +601,397 @@ async function main() {
       interval: 60 * 60 * 1000, // Check every hour if still running
     });
 
-    // Task 3.6: Process chat messages - FAST RESPONSE
+    // Task 3.6: Process chat messages - handled by instant monitor now
     orchestrator.addTask({
       id: "chat_processor",
       name: "Process chat messages",
       fn: async (taskContext: any) => {
         const context = getContext(taskContext);
-        
+
         try {
+          // Still process unprocessed messages in case instant monitor misses any
           await context.chatService.processUnprocessedMessages();
         } catch (error) {
           console.error("[ChatProcessor] Error:", error);
         }
       },
       runOnStart: true,
-      interval: 2 * 1000, // Process every 2 seconds for fast response
+      interval: 5 * 1000, // Process every 5 seconds as backup
     });
 
-    // Task 3.7: Quick chat sync for active orders - INSTANT RESPONSE
+    // Task 3.7: Check for active orders periodically
     orchestrator.addTask({
-      id: "quick_chat_sync",
-      name: "Quick sync for active order chats",
+      id: "order_checker",
+      name: "Check for active Bybit orders",
       fn: async (taskContext: any) => {
         const context = getContext(taskContext);
         
+        // Skip if bybitManager is not initialized
+        if (!context.bybitManager) {
+          return;
+        }
+        
+        console.log("\n[OrderChecker] ========= CHECKING ORDERS =========");
+        console.log(`[OrderChecker] Time: ${new Date().toLocaleString()}`);
+
         try {
-          // Check for active transactions with orders
-          const activeTransactions = await context.db.prisma.transaction.findMany({
-            where: {
-              orderId: { not: null },
-              status: { in: ['waiting_payment', 'payment_received'] }
-            },
-            include: {
-              advertisement: true,
-              chatMessages: true
-            }
-          });
-
-          for (const transaction of activeTransactions) {
-            if (transaction.orderId) {
-              try {
-                // Quick sync messages
-                const client = context.bybitManager.getClient(transaction.advertisement.bybitAccountId);
-                const httpClient = (client as any).httpClient;
+          const accounts = await context.bybitManager.getActiveAccounts();
+          
+          // Skip if no accounts
+          if (accounts.length === 0) {
+            console.log("[OrderChecker] No Bybit accounts available yet");
+            return;
+          }
+          let totalActiveOrders = 0;
+          
+          for (const account of accounts) {
+            const client = context.bybitManager.getClient(account.accountId);
+            if (!client) continue;
+            
+            console.log(`\n[OrderChecker] 📋 Checking account: ${account.accountId}`);
+            
+            // Get all orders
+            const ordersResult = await client.getOrdersSimplified({
+              page: 1,
+              size: 20,
+            });
+            
+            console.log(`   Found ${ordersResult.count} total orders`);
+            
+            if (ordersResult.items && ordersResult.items.length > 0) {
+              // Count active orders
+              const activeOrders = ordersResult.items.filter(
+                (order: any) => order.status === 10 || order.status === 20
+              );
+              
+              totalActiveOrders += activeOrders.length;
+              
+              if (activeOrders.length > 0) {
+                console.log(`   ✅ Active orders: ${activeOrders.length}`);
                 
-                const chatResponse = await httpClient.post('/v5/p2p/order/message/listpage', {
-                  orderId: transaction.orderId,
-                  size: "10" // Get only recent messages for quick sync
-                });
-
-                if (chatResponse.result?.result && Array.isArray(chatResponse.result.result)) {
-                  for (const msg of chatResponse.result.result) {
-                    if (!msg.message) continue;
-                    
-                    // Check if message exists
-                    const exists = await context.db.prisma.chatMessage.findFirst({
-                      where: {
-                        transactionId: transaction.id,
-                        messageId: msg.id
-                      }
+                // Process each active order
+                for (const order of activeOrders) {
+                  console.log(`\n   📦 Order: ${order.id}`);
+                  console.log(`      Status: ${order.status} (${order.status === 10 ? 'Payment in processing' : 'Waiting for coin transfer'})`);
+                  console.log(`      Amount: ${order.amount} ${order.currencyId}`);
+                  console.log(`      Counterparty: ${order.targetNickName}`);
+                  
+                  // Get chat messages for this order
+                  const chatResponse = await client.getChatMessages(order.id, 1, 10);
+                  
+                  let messages = [];
+                  if (Array.isArray(chatResponse)) {
+                    messages = chatResponse;
+                  } else if (chatResponse && chatResponse.list) {
+                    messages = chatResponse.list;
+                  } else if (chatResponse && chatResponse.result) {
+                    messages = chatResponse.result;
+                  }
+                  
+                  console.log(`      📨 Found ${messages.length} chat messages`);
+                  
+                  // Check who sent messages
+                  const ourMessages = messages.filter((msg: any) => msg.userId === order.userId);
+                  const theirMessages = messages.filter((msg: any) => msg.userId !== order.userId);
+                  
+                  console.log(`      📊 Our: ${ourMessages.length}, Their: ${theirMessages.length}`);
+                  
+                  // Debug: show message details
+                  if (messages.length > 0) {
+                    console.log(`      🔍 Order userId: ${order.userId}`);
+                    messages.slice(0, 3).forEach((msg: any, idx: number) => {
+                      console.log(`      Message ${idx + 1}: userId=${msg.userId}, nickName=${msg.nickName}, text="${msg.message?.substring(0, 50)}..."`);
                     });
-
-                    if (!exists) {
-                      // Get order info to determine sender
-                      const orderInfo = await httpClient.post('/v5/p2p/order/info', {
-                        orderId: transaction.orderId
+                  }
+                  
+                  if (messages.length > 0) {
+                    const latestMsg = messages[0];
+                    console.log(`      💬 Latest: "${latestMsg.message?.substring(0, 60)}..."`);
+                  }
+                  
+                  // Check if we have a transaction for this order
+                  let transaction = await context.db.getTransactionByOrderId(order.id);
+                  
+                  if (!transaction) {
+                    console.log(`      ⚠️ No transaction found - creating...`);
+                    
+                    // Try to find advertisement
+                    const ads = await context.db.getAdvertisements();
+                    let ad = ads.find(a => a.bybitAdId === order.itemId);
+                    
+                    if (!ad) {
+                      // Create minimal advertisement
+                      ad = await context.db.createAdvertisement({
+                        bybitAdId: order.itemId || `temp_${order.id}`,
+                        bybitAccountId: account.id,
+                        side: order.side === 1 ? "SELL" : "BUY",
+                        asset: order.tokenId || "USDT",
+                        fiatCurrency: order.currencyId || "RUB",
+                        price: order.price || "0",
+                        quantity: order.notifyTokenQuantity || "0",
+                        minOrderAmount: "100",
+                        maxOrderAmount: order.amount || "10000",
+                        paymentMethod: "Bank Transfer",
+                        status: "ONLINE",
                       });
-                      
-                      const sender = msg.userId === orderInfo.result.userId ? 'us' : 'counterparty';
-                      
-                      await context.db.prisma.chatMessage.create({
+                      console.log(`      ✅ Created advertisement ${ad.id}`);
+                    }
+                    
+                    // Find or create payout
+                    let payout = await context.db.prisma.payout.findFirst({
+                      where: { status: 5 },
+                      orderBy: { createdAt: 'desc' },
+                    });
+                    
+                    if (!payout) {
+                      const amount = parseFloat(order.amount || "0");
+                      payout = await context.db.prisma.payout.create({
                         data: {
-                          transactionId: transaction.id,
-                          messageId: msg.id,
-                          sender: sender,
-                          content: msg.message,
-                          messageType: msg.contentType === 'str' ? 'TEXT' : msg.contentType?.toUpperCase() || 'TEXT',
-                          isProcessed: sender === 'us'
-                        }
+                          status: 5,
+                          amount: amount,
+                          amountTrader: JSON.stringify({ "643": amount }),
+                          totalTrader: JSON.stringify({ "643": amount }),
+                          wallet: order.targetNickName || "temp",
+                          recipientCard: order.targetNickName || "temp",
+                          gateAccount: account.accountId,
+                        },
                       });
-                      
-                      console.log(`[QuickSync] New message from ${sender}: ${msg.message.substring(0, 50)}...`);
+                    }
+                    
+                    // Create transaction
+                    transaction = await context.db.createTransaction({
+                      payoutId: payout.id,
+                      advertisementId: ad.id,
+                      status: order.status === 10 ? "chat_started" : "waiting_payment",
+                    });
+                    
+                    await context.db.updateTransaction(transaction.id, {
+                      orderId: order.id,
+                    });
+                    
+                    console.log(`      ✅ Created transaction ${transaction.id}`);
+                  } else {
+                    console.log(`      ✅ Transaction exists: ${transaction.id}`);
+                  }
+                  
+                  // Skip if transaction is marked as stupid
+                  if (transaction.status === "stupid") {
+                    console.log(`      ⚠️ Skipping order - marked as stupid`);
+                    continue;
+                  }
+                  
+                  // Check if we already have messages in database
+                  const dbMessages = await context.db.getChatMessages(transaction.id);
+                  const ourDbMessages = dbMessages.filter(msg => msg.sender === "us");
+                  
+                  // Save their messages to database
+                  for (const msg of theirMessages) {
+                    const existingMsg = await context.db.getChatMessageByMessageId(msg.id);
+                    if (!existingMsg) {
+                      await context.db.createChatMessage({
+                        transactionId: transaction.id,
+                        messageId: msg.id,
+                        sender: "them",
+                        content: msg.message || "",
+                        messageType: msg.contentType === "pic" ? "IMAGE" : "TEXT",
+                        sentAt: new Date(parseInt(msg.createDate)),
+                        isProcessed: false,
+                      });
+                      console.log(`      💾 Saved their message: "${msg.message?.substring(0, 50)}..."`);
                     }
                   }
+                  
+                  // If no messages from us (both API and DB) and order is active, send initial message
+                  if (ourMessages.length === 0 && ourDbMessages.length === 0 && order.status === 10) {
+                    console.log(`      🤖 No messages from us - sending initial message...`);
+                    
+                    try {
+                      await context.chatService.startAutomation(transaction.id);
+                      console.log(`      ✅ Chat automation started!`);
+                    } catch (error) {
+                      console.error(`      ❌ Failed to start chat automation:`, error);
+                    }
+                  } else if (ourMessages.length > 0 || ourDbMessages.length > 0) {
+                    console.log(`      ✅ We already sent messages (API: ${ourMessages.length}, DB: ${ourDbMessages.length})`);
+                  }
                 }
-              } catch (error) {
-                // Silent fail for quick sync
+              }
+            }
+          }
+          
+          console.log(`\n[OrderChecker] Total active orders found: ${totalActiveOrders}`);
+          console.log("[OrderChecker] ==========================================\n");
+          
+        } catch (error) {
+          console.error("[OrderChecker] Error:", error);
+        }
+      },
+      runOnStart: true,
+      interval: 3 * 1000, // Check every 3 seconds for faster response
+    });
+
+    // Task 3.8: Aggressive chat monitor for active orders
+    orchestrator.addTask({
+      id: "chat_monitor",
+      name: "Monitor chats for active orders",
+      fn: async (taskContext: any) => {
+        const context = getContext(taskContext);
+        
+        // Skip if not initialized
+        if (!context.bybitManager || !context.db) {
+          return;
+        }
+        
+        try {
+          const accounts = await context.bybitManager.getActiveAccounts();
+          
+          if (accounts.length === 0) {
+            return;
+          }
+          
+          for (const account of accounts) {
+            const client = context.bybitManager.getClient(account.accountId);
+            if (!client) continue;
+            
+            // Get active orders
+            const ordersResult = await client.getOrdersSimplified({
+              page: 1,
+              size: 20,
+              status: 10, // Only payment in processing
+            });
+            
+            if (ordersResult.items && ordersResult.items.length > 0) {
+              for (const order of ordersResult.items) {
+                // Get chat messages
+                try {
+                  const chatResponse = await client.getChatMessages(order.id, 1, 5);
+                  
+                  let messages = [];
+                  if (Array.isArray(chatResponse)) {
+                    messages = chatResponse;
+                  } else if (chatResponse && chatResponse.list) {
+                    messages = chatResponse.list;
+                  } else if (chatResponse && chatResponse.result) {
+                    messages = chatResponse.result;
+                  }
+                  
+                  // Check if we sent any messages
+                  const ourMessages = messages.filter((msg: any) => msg.userId === order.userId);
+                  
+                  // Also check database for sent messages
+                  let existingTransaction = await context.db.getTransactionByOrderId(order.id);
+                  if (existingTransaction) {
+                    // Skip if transaction is marked as stupid
+                    if (existingTransaction.status === "stupid") {
+                      continue;
+                    }
+                    
+                    const dbMessages = await context.db.getChatMessages(existingTransaction.id);
+                    const ourDbMessages = dbMessages.filter(msg => msg.sender === "us");
+                    if (ourDbMessages.length > 0) {
+                      continue; // Skip if we already sent messages
+                    }
+                  }
+                  
+                  if (ourMessages.length === 0 && order.status === 10) {
+                    console.log(`\n[ChatMonitor] 🆕 Order ${order.id} needs initial message`);
+                    console.log(`[ChatMonitor] Amount: ${order.amount} ${order.currencyId}`);
+                    console.log(`[ChatMonitor] Counterparty: ${order.targetNickName}`);
+                    
+                    // Create minimal transaction if needed
+                    let transaction = existingTransaction;
+                    
+                    if (!transaction) {
+                      // Quick create transaction
+                      const ads = await context.db.getAdvertisements();
+                      let ad = ads.find(a => a.bybitAdId === order.itemId);
+                      
+                      if (!ad) {
+                        ad = await context.db.createAdvertisement({
+                          bybitAdId: order.itemId || `temp_${order.id}`,
+                          bybitAccountId: account.id,
+                          side: "SELL",
+                          asset: "USDT",
+                          fiatCurrency: "RUB",
+                          price: order.price || "0",
+                          quantity: order.notifyTokenQuantity || "0",
+                          minOrderAmount: "100",
+                          maxOrderAmount: order.amount || "10000",
+                          paymentMethod: "Bank Transfer",
+                          status: "ONLINE",
+                        });
+                      }
+                      
+                      // Get any payout
+                      const payouts = await context.db.prisma.payout.findFirst({
+                        where: { status: 5 },
+                      });
+                      
+                      let payoutId = payouts?.id;
+                      if (!payoutId) {
+                        const amount = parseFloat(order.amount || "0");
+                        const payout = await context.db.prisma.payout.create({
+                          data: {
+                            status: 5,
+                            amount: amount,
+                            amountTrader: JSON.stringify({ "643": amount }),
+                            totalTrader: JSON.stringify({ "643": amount }),
+                            wallet: order.targetNickName || "temp",
+                            recipientCard: order.targetNickName || "temp",
+                            gateAccount: account.accountId,
+                          },
+                        });
+                        payoutId = payout.id;
+                      }
+                      
+                      transaction = await context.db.createTransaction({
+                        payoutId: payoutId,
+                        advertisementId: ad.id,
+                        status: "chat_started",
+                      });
+                      
+                      await context.db.updateTransaction(transaction.id, {
+                        orderId: order.id,
+                      });
+                    }
+                    
+                    // Start chat automation instead of sending directly
+                    try {
+                      await context.chatService.startAutomation(transaction.id);
+                      console.log(`[ChatMonitor] ✅ Started chat automation for order ${order.id}`);
+                    } catch (error) {
+                      console.error(`[ChatMonitor] Failed to start automation:`, error);
+                    }
+                  }
+                } catch (error) {
+                  // Silent fail for individual orders
+                }
               }
             }
           }
         } catch (error) {
-          // Silent fail for quick sync
+          // Silent fail
         }
       },
       runOnStart: true,
-      interval: 1000, // Check every second for instant response
+      interval: 1 * 1000, // Check every second
     });
 
-    // Task 4: Legacy Gmail check (for backward compatibility)
+    // Task 4.5: Process incoming chat messages
     orchestrator.addTask({
-      id: "gmail_listener",
-      name: "Legacy Gmail check",
+      id: "chat_processor",
+      name: "Process incoming chat messages",
       fn: async (taskContext: any) => {
-        // This is now handled by receipt_processor
-        // Kept for backward compatibility
+        const context = getContext(taskContext);
+        try {
+          // Process unprocessed messages
+          await context.chatService.processUnprocessedMessages();
+        } catch (error) {
+          console.error("[ChatProcessor] Error:", error);
+        }
       },
-      interval: 60 * 60 * 1000, // 1 hour (effectively disabled)
+      runOnStart: true,
+      interval: 2 * 1000, // Check every 2 seconds
     });
 
     // Task 5: Handle failed/stuck transactions
@@ -705,14 +1003,18 @@ async function main() {
         try {
           // Check for stuck transactions (no activity for 30 minutes)
           const stuckTransactions = await context.db.getStuckTransactions();
-          
+
           for (const transaction of stuckTransactions) {
-            console.log(`[Successer] Found stuck transaction ${transaction.id}`);
-            
-            if (await promptUser(`Mark transaction ${transaction.id} as failed?`)) {
+            console.log(
+              `[Successer] Found stuck transaction ${transaction.id}`,
+            );
+
+            if (
+              await promptUser(`Mark transaction ${transaction.id} as failed?`)
+            ) {
               await context.db.updateTransaction(transaction.id, {
-                status: 'failed',
-                failureReason: 'Transaction stuck - no activity for 30 minutes'
+                status: "failed",
+                failureReason: "Transaction stuck - no activity for 30 minutes",
               });
             }
           }
@@ -767,6 +1069,13 @@ async function main() {
     await orchestrator.start();
 
     console.log("Orchestrator started successfully!");
+
+    // Start WebSocket server
+    const webSocketPort = parseInt(process.env.WEBSOCKET_PORT || "3001");
+    const webSocketServer = new WebSocketServer(webSocketPort);
+    await webSocketServer.start();
+    console.log(`WebSocket server started on port ${webSocketPort}`);
+
     console.log("Press Ctrl+C to stop");
 
     // Keep the process alive
@@ -785,22 +1094,30 @@ async function main() {
 
       try {
         await orchestrator.stop();
-        
+
         // Stop order processor
         if (orchestrator.context.orderProcessor) {
           orchestrator.context.orderProcessor.stop();
         }
-        
-        // Stop receipt processor  
+
+        // Stop receipt processor
         if (orchestrator.context.receiptProcessor) {
           orchestrator.context.receiptProcessor.stop();
         }
-        
+
         // Stop active orders monitor
         if (orchestrator.context.activeOrdersMonitor) {
           await orchestrator.context.activeOrdersMonitor.cleanup();
         }
-        
+
+        // Stop instant order monitor
+        if (orchestrator.context.instantOrderMonitor) {
+          orchestrator.context.instantOrderMonitor.stop();
+        }
+
+        // Stop WebSocket server
+        await webSocketServer.stop();
+
         await db.disconnect();
         console.log("Shutdown complete");
         process.exit(0);

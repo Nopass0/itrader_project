@@ -24,6 +24,11 @@
     "noUnusedParameters": false,
     "noPropertyAccessFromIndexSignature": false,
 
+    // Additional flags for compatibility
+    "esModuleInterop": true,
+    "downlevelIteration": true,
+    "allowSyntheticDefaultImports": true,
+
     "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"]

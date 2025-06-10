@@ -597,7 +597,7 @@ export class BybitP2PManagerService {
     // Save to database with the parameters we sent
     const dbAd = await db.createAdvertisement({
       bybitAdId: itemId,
-      bybitAccountId: account.accountId,
+      bybitAccountId: account.id,
       side: "SELL",
       asset: "USDT",
       fiatCurrency: currency,
@@ -828,5 +828,163 @@ export class BybitP2PManagerService {
           accountNo: accountNo,
         };
       });
+  }
+
+  /**
+   * Get all active orders for all accounts
+   */
+  async getAllActiveOrders(): Promise<any[]> {
+    await this.ensureInitialized();
+    
+    const accounts = await db.getActiveBybitAccounts();
+    const allOrders: any[] = [];
+    
+    for (const account of accounts) {
+      try {
+        const client = this.manager.getClient(account.accountId);
+        if (!client) continue;
+        
+        const httpClient = (client as any).httpClient;
+        
+        // Get orders with status 5, 10, 20
+        const statuses = [5, 10, 20];
+        
+        // Try pending orders endpoint first
+        try {
+          console.log(`[BybitP2PManager] Checking pending orders for account ${account.accountId}...`);
+          
+          const pendingResponse = await httpClient.post("/v5/p2p/order/pending/simplifyList", {
+            page: 1,
+            size: 50,
+          });
+          
+          if (pendingResponse.result) {
+            // Check different response structures
+            let items = [];
+            if (pendingResponse.result.result?.items) {
+              items = pendingResponse.result.result.items;
+            } else if (pendingResponse.result.items) {
+              items = pendingResponse.result.items;
+            }
+            
+            if (items.length > 0) {
+              console.log(`[BybitP2PManager] Pending endpoint returned ${items.length} items`);
+              
+              for (const order of items) {
+                if (statuses.includes(order.status)) {
+                  allOrders.push({
+                    ...order,
+                    bybitAccountId: account.accountId,
+                  });
+                }
+              }
+            } else {
+              console.log(`[BybitP2PManager] Pending endpoint returned count=${pendingResponse.result.count || 0} but no items`);
+            }
+          }
+        } catch (error: any) {
+          console.log(`[BybitP2PManager] Pending endpoint failed, trying regular endpoint...`);
+        }
+        
+        // Also try regular orders endpoint
+        try {
+          const response = await httpClient.post("/v5/p2p/order/simplifyList", {
+            page: 1,
+            size: 50,
+          });
+          
+          if (response.result?.result) {
+            const result = response.result.result;
+            
+            // Check different possible response structures
+            let items = [];
+            if (Array.isArray(result.items)) {
+              items = result.items;
+            } else if (Array.isArray(result)) {
+              items = result;
+            }
+            
+            if (items.length > 0) {
+              console.log(`[BybitP2PManager] Regular endpoint returned ${items.length} items`);
+              
+              // Filter for active statuses and avoid duplicates
+              const activeOrders = items.filter((order: any) => 
+                statuses.includes(order.status) && 
+                !allOrders.find(o => o.id === order.id)
+              );
+              
+              for (const order of activeOrders) {
+                allOrders.push({
+                  ...order,
+                  bybitAccountId: account.accountId,
+                });
+              }
+            }
+          }
+        } catch (error: any) {
+          console.error(
+            `[BybitP2PManager] Error fetching orders for account ${account.accountId}:`,
+            error.message || error
+          );
+        }
+        
+        // Try using the P2P client's getOrders method directly
+        try {
+          const orders = await client.getOrders(1, 50);
+          if (orders.list && orders.list.length > 0) {
+            console.log(`[BybitP2PManager] Direct getOrders returned ${orders.list.length} items`);
+            
+            const activeOrders = orders.list.filter((order: any) => 
+              statuses.includes(order.status) && 
+              !allOrders.find(o => o.id === order.id)
+            );
+            
+            for (const order of activeOrders) {
+              allOrders.push({
+                ...order,
+                bybitAccountId: account.accountId,
+              });
+            }
+          }
+        } catch (error: any) {
+          console.error(
+            `[BybitP2PManager] Direct getOrders failed:`,
+            error.message || error
+          );
+        }
+      } catch (error) {
+        console.error(
+          `[BybitP2PManager] Error processing account ${account.accountId}:`,
+          error
+        );
+      }
+    }
+    
+    console.log(`[BybitP2PManager] Total active orders found: ${allOrders.length}`);
+    return allOrders;
+  }
+
+  /**
+   * Get order details
+   */
+  async getOrderDetails(orderId: string, accountId: string): Promise<any> {
+    await this.ensureInitialized();
+    
+    const client = this.manager.getClient(accountId);
+    if (!client) {
+      throw new Error(`No client found for account ${accountId}`);
+    }
+    
+    const httpClient = (client as any).httpClient;
+    
+    const response = await httpClient.post("/v5/p2p/order/info", {
+      orderId: orderId,
+    });
+    
+    if (response.result?.result) {
+      return response.result.result;
+    }
+    
+    throw new Error(`Failed to get order details for ${orderId}`);
   }
 }

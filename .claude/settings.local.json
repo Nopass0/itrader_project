@@ -47,7 +47,17 @@
       "Bash(npx ts-node:*)",
       "Bash(npx tsx:*)",
       "Bash(bun test:*)",
-      "Bash(pdftotext:*)"
+      "Bash(pdftotext:*)",
+      "Bash(npx prisma migrate dev:*)",
+      "Bash(npx prisma:*)",
+      "Bash(pkill:*)",
+      "Bash(true)",
+      "Bash(curl:*)",
+      "Bash(bun remove:*)",
+      "Bash(./cleanup-dev.sh:*)",
+      "Bash(node:*)",
+      "Bash(/home/user/Android/Sdk/platform-tools/sqlite3 database.db \"SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;\")",
+      "Bash(bun:*)"
     ],
     "deny": []
   }

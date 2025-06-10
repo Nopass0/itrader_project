@@ -95,14 +95,12 @@ export class HttpClient {
     config.headers['X-BAPI-RECV-WINDOW'] = recvWindow;
     config.headers['X-BAPI-SIGN'] = signature;
 
-    if (this.config.debugMode) {
+    // Only log in debug mode if explicitly requested via environment variable
+    if (this.config.debugMode && process.env.VERBOSE_HTTP_LOG === 'true') {
       console.log('Request Details:');
       console.log('  Method:', config.method);
       console.log('  URL:', config.url);
-      console.log('  Headers:', config.headers);
       console.log('  Query String:', queryString);
-      console.log('  Data:', config.data);
-      console.log('  Signature String:', `${timestamp}${this.config.apiKey}${recvWindow}${queryString}`);
     }
 
     return config;
@@ -114,7 +112,8 @@ export class HttpClient {
   private handleResponse<T>(response: AxiosResponse<ApiResponse<T>>): ApiResponse<T> {
     const data = response.data;
     
-    if (this.config.debugMode) {
+    // Only log raw response in debug mode if explicitly requested
+    if (this.config.debugMode && process.env.VERBOSE_HTTP_LOG === 'true') {
       console.log('[HTTPClient] Raw response data:', JSON.stringify(data, null, 2));
     }
     
