@@ -555,7 +555,7 @@ async function main() {
         try {
           // Active orders monitor runs its own polling loop
           if (!context.activeOrdersMonitor.isMonitoring) {
-            await context.activeOrdersMonitor.startMonitoring(30000); // Check every 30 seconds
+            await context.activeOrdersMonitor.startMonitoring(10000); // Check every 10 seconds for faster response
           }
         } catch (error) {
           console.error("[ActiveOrdersMonitor] Error:", error);
@@ -588,7 +588,7 @@ async function main() {
       interval: 60 * 60 * 1000, // Check every hour if still running
     });
 
-    // Task 3.6: Process chat messages
+    // Task 3.6: Process chat messages - FAST RESPONSE
     orchestrator.addTask({
       id: "chat_processor",
       name: "Process chat messages",
@@ -601,7 +601,88 @@ async function main() {
           console.error("[ChatProcessor] Error:", error);
         }
       },
-      interval: 5 * 1000, // Process every 5 seconds
+      runOnStart: true,
+      interval: 2 * 1000, // Process every 2 seconds for fast response
+    });
+
+    // Task 3.7: Quick chat sync for active orders - INSTANT RESPONSE
+    orchestrator.addTask({
+      id: "quick_chat_sync",
+      name: "Quick sync for active order chats",
+      fn: async (taskContext: any) => {
+        const context = getContext(taskContext);
+        
+        try {
+          // Check for active transactions with orders
+          const activeTransactions = await context.db.prisma.transaction.findMany({
+            where: {
+              orderId: { not: null },
+              status: { in: ['waiting_payment', 'payment_received'] }
+            },
+            include: {
+              advertisement: true,
+              chatMessages: true
+            }
+          });
+
+          for (const transaction of activeTransactions) {
+            if (transaction.orderId) {
+              try {
+                // Quick sync messages
+                const client = context.bybitManager.getClient(transaction.advertisement.bybitAccountId);
+                const httpClient = (client as any).httpClient;
+                
+                const chatResponse = await httpClient.post('/v5/p2p/order/message/listpage', {
+                  orderId: transaction.orderId,
+                  size: "10" // Get only recent messages for quick sync
+                });
+
+                if (chatResponse.result?.result && Array.isArray(chatResponse.result.result)) {
+                  for (const msg of chatResponse.result.result) {
+                    if (!msg.message) continue;
+                    
+                    // Check if message exists
+                    const exists = await context.db.prisma.chatMessage.findFirst({
+                      where: {
+                        transactionId: transaction.id,
+                        messageId: msg.id
+                      }
+                    });
+
+                    if (!exists) {
+                      // Get order info to determine sender
+                      const orderInfo = await httpClient.post('/v5/p2p/order/info', {
+                        orderId: transaction.orderId
+                      });
+                      
+                      const sender = msg.userId === orderInfo.result.userId ? 'us' : 'counterparty';
+                      
+                      await context.db.prisma.chatMessage.create({
+                        data: {
+                          transactionId: transaction.id,
+                          messageId: msg.id,
+                          sender: sender,
+                          content: msg.message,
+                          messageType: msg.contentType === 'str' ? 'TEXT' : msg.contentType?.toUpperCase() || 'TEXT',
+                          isProcessed: sender === 'us'
+                        }
+                      });
+                      
+                      console.log(`[QuickSync] New message from ${sender}: ${msg.message.substring(0, 50)}...`);
+                    }
+                  }
+                }
+              } catch (error) {
+                // Silent fail for quick sync
+              }
+            }
+          }
+        } catch (error) {
+          // Silent fail for quick sync
+        }
+      },
+      runOnStart: true,
+      interval: 1000, // Check every second for instant response
     });
 
     // Task 4: Legacy Gmail check (for backward compatibility)

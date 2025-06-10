@@ -419,7 +419,7 @@ export class P2PClient extends EventEmitter {
   /**
    * Start polling for chat messages
    */
-  startChatPolling(orderId: string, intervalMs: number = 3000): void {
+  startChatPolling(orderId: string, intervalMs: number = 1500): void {
     const key = `chat_${orderId}`;
     if (this.pollingIntervals.has(key)) {
       return;
